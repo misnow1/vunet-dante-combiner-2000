@@ -56,3 +56,7 @@ Validate config without starting:
 ```bash
 ./bin/combiner -check -config config/site.example.yaml
 ```
+
+## License
+
+[MIT](LICENSE)

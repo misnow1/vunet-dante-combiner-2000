@@ -1,0 +1,9 @@
+---
+description: Do not run CodeRabbit CLI or request CodeRabbit reviews in this repo
+alwaysApply: true
+---
+
+CodeRabbit is disabled for this repository (see `.coderabbit.yaml`).
+
+- Do not run `coderabbit`, `cr`, or CodeRabbit MCP review tools here.
+- Do not suggest enabling CodeRabbit or adding review bots unless the user explicitly asks.

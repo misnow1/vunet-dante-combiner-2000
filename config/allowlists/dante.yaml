@@ -1,0 +1,41 @@
+# Dante discovery / control multicast — seeded from Audinate network admin docs.
+# Do NOT add PTP or media groups here.
+
+name: dante
+vlan: dante
+groups:
+  - name: mdns
+    address: 224.0.0.251
+    port: 5353
+    proto: udp
+    direction: both
+    notes: mDNS / DNS-SD device discovery
+
+  - name: dante-ctrl-230
+    address: 224.0.0.230
+    port: 8700
+    port_end: 8708
+    proto: udp
+    direction: both
+    notes: Dante multicast control and monitoring
+
+  - name: dante-ctrl-231
+    address: 224.0.0.231
+    port: 8700
+    port_end: 8708
+    proto: udp
+    direction: both
+
+  - name: dante-ctrl-232
+    address: 224.0.0.232
+    port: 8700
+    port_end: 8708
+    proto: udp
+    direction: both
+
+  - name: dante-ctrl-233
+    address: 224.0.0.233
+    port: 8700
+    port_end: 8708
+    proto: udp
+    direction: both

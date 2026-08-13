@@ -1,0 +1,14 @@
+# CodeRabbit is disabled for this repository.
+# Manual @coderabbitai review commands on PRs will still work if someone opts in.
+
+language: en-US
+reviews:
+  auto_review:
+    enabled: false
+  finishing_touches:
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+chat:
+  auto_reply: false

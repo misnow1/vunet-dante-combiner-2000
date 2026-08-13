@@ -1,0 +1,24 @@
+[Unit]
+Description=VuNET/Dante Control Combiner (multicast reflector + status)
+After=network-online.target nftables.service
+Requires=nftables.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/combiner -config /etc/combiner/site.yaml
+Restart=on-failure
+RestartSec=2
+# Reflector needs CAP_NET_RAW/ADMIN for multicast joins; status is unprivileged HTTP.
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/misc /var/lib/dnsmasq
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK AF_PACKET
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

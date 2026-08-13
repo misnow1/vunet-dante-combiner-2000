@@ -1,0 +1,15 @@
+# Lake Controller discovery — FILL FROM CAPTURE
+# Lake frames use static IPv4 on the Dante subnet in this design.
+# See docs/capture-playbook.md (Dante VLAN with Lake Controller open).
+
+name: lake
+vlan: dante
+groups: []
+# Example after capture:
+# groups:
+#   - name: lake-discovery
+#     address: 239.x.x.x
+#     port: 0
+#     proto: udp
+#     direction: both
+#     notes: captured YYYY-MM-DD

@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local/combiner/site.schema.json",
+  "title": "CombinerSiteConfig",
+  "description": "JSON Schema for site.yaml. Validate with any draft-2020-12 tool, or rely on the combiner Go loader which enforces the same fields.",
+  "type": "object",
+  "required": ["hostname", "physical_interface", "vlans", "mgmt_dhcp", "allowlist_files"],
+  "additionalProperties": false,
+  "properties": {
+    "hostname": { "type": "string", "minLength": 1 },
+    "physical_interface": { "type": "string", "minLength": 1 },
+    "status_listen": { "type": "string", "default": ":8080" },
+    "vlans": {
+      "type": "object",
+      "required": ["mgmt", "control", "dante"],
+      "additionalProperties": false,
+      "properties": {
+        "mgmt": { "$ref": "#/$defs/vlan" },
+        "control": { "$ref": "#/$defs/vlan" },
+        "dante": { "$ref": "#/$defs/vlan" }
+      }
+    },
+    "mgmt_dhcp": {
+      "type": "object",
+      "required": ["range_start", "range_end", "lease"],
+      "additionalProperties": false,
+      "properties": {
+        "range_start": { "type": "string" },
+        "range_end": { "type": "string" },
+        "lease": { "type": "string" },
+        "domain": { "type": "string" }
+      }
+    },
+    "allowlist_files": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "deny_multicast_prefixes": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "dante_unicast_udp_ports": {
+      "type": "array",
+      "items": { "type": "integer", "minimum": 1, "maximum": 65535 },
+      "description": "Optional hint list for docs/status; nftables MVP allows established+related and forwarded UDP broadly on Mgmt<->Dante/Control after capture tightening is optional"
+    }
+  },
+  "$defs": {
+    "vlan": {
+      "type": "object",
+      "required": ["id", "address", "prefix"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "integer", "minimum": 1, "maximum": 4094 },
+        "address": { "type": "string" },
+        "prefix": { "type": "integer", "minimum": 8, "maximum": 30 },
+        "interface_name": { "type": "string" }
+      }
+    }
+  }
+}

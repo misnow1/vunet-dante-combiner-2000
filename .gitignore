@@ -1,0 +1,15 @@
+# Binaries and local overrides
+/bin/
+/dist/
+*.pcap
+site.yaml
+/etc-combiner-staging/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Go
+vendor/

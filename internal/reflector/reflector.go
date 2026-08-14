@@ -16,14 +16,27 @@ import (
 )
 
 type Stats struct {
-	PacketsIn     uint64 `json:"packets_in"`
-	PacketsOut    uint64 `json:"packets_out"`
-	PacketsDrop   uint64 `json:"packets_drop"`
-	Groups        int    `json:"groups"`
-	ListenersUp   int    `json:"listeners_up"`
-	ListenersFail int    `json:"listeners_fail"`
-	LastError     string `json:"last_error,omitempty"`
-	LastPacket    string `json:"last_packet,omitempty"`
+	PacketsIn     uint64       `json:"packets_in"`
+	PacketsOut    uint64       `json:"packets_out"`
+	PacketsDrop   uint64       `json:"packets_drop"`
+	Groups        int          `json:"groups"`
+	ListenersUp   int          `json:"listeners_up"`
+	ListenersFail int          `json:"listeners_fail"`
+	LastError     string       `json:"last_error,omitempty"`
+	LastPacket    string       `json:"last_packet,omitempty"`
+	Memberships   []Membership `json:"memberships,omitempty"`
+}
+
+// Membership is a joined allowlist group on Mgmt <-> peer VLAN.
+type Membership struct {
+	Allowlist string `json:"allowlist"`
+	Name      string `json:"name"`
+	Address   string `json:"address"`
+	Port      int    `json:"port"`
+	VLAN      string `json:"vlan"` // control|dante
+	MgmtIface string `json:"mgmt_iface"`
+	PeerIface string `json:"peer_iface"`
+	Direction string `json:"direction"`
 }
 
 type membership struct {
@@ -48,6 +61,7 @@ type Service struct {
 	packetsIn     uint64
 	packetsOut    uint64
 	packetsDrop   uint64
+	memberships   []Membership
 }
 
 func New(site *config.Site, inv *inventory.Store) (*Service, error) {
@@ -74,6 +88,7 @@ func New(site *config.Site, inv *inventory.Store) (*Service, error) {
 func (s *Service) Stats() Stats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	mem := append([]Membership(nil), s.memberships...)
 	return Stats{
 		PacketsIn:     atomic.LoadUint64(&s.packetsIn),
 		PacketsOut:    atomic.LoadUint64(&s.packetsOut),
@@ -83,6 +98,7 @@ func (s *Service) Stats() Stats {
 		ListenersFail: s.listenersFail,
 		LastError:     s.lastError,
 		LastPacket:    s.lastPacket,
+		Memberships:   mem,
 	}
 }
 
@@ -132,6 +148,7 @@ func (s *Service) Run(ctx context.Context) error {
 
 	byPort := map[int][]membership{}
 	seen := map[string]struct{}{} // group|port|peer
+	var mems []Membership
 	for _, al := range s.site.Allowlists {
 		peer, err := s.site.PeerIface(al.VLAN)
 		if err != nil {
@@ -161,9 +178,22 @@ func (s *Service) Run(ctx context.Context) error {
 					peerIf:    peer,
 					direction: g.Direction,
 				})
+				mems = append(mems, Membership{
+					Allowlist: al.Name,
+					Name:      g.Name,
+					Address:   ip.String(),
+					Port:      port,
+					VLAN:      al.VLAN,
+					MgmtIface: mgmt,
+					PeerIface: peer,
+					Direction: g.Direction,
+				})
 			}
 		}
 	}
+	s.mu.Lock()
+	s.memberships = mems
+	s.mu.Unlock()
 
 	var wg sync.WaitGroup
 	for port, members := range byPort {
@@ -369,6 +399,9 @@ func (s *Service) servePort(ctx context.Context, mgmtIf string, port int, member
 			}
 
 			s.inv.Observe(srcIP, seenVLAN, m.allowlist+"/"+m.name)
+			// Attribute activity to the production VLAN (control|dante) so the
+			// status page can show groups seen on those interfaces.
+			s.inv.ObserveGroup(m.vlanRole, m.allowlist+"/"+m.name, m.groupIP.String(), port, srcIP)
 			s.setPacket(fmt.Sprintf("%s %s -> %s %s:%d %dB", srcIP, inIf, outIf.Name, m.groupIP, port, n))
 
 			_ = p.SetMulticastTTL(multicastTTL(m.groupIP))

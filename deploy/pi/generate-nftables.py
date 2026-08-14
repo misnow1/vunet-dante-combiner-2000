@@ -42,7 +42,14 @@ def load_site(path: Path) -> dict:
 
 
 def iface(vlan: dict, phys: str) -> str:
-    name = vlan.get("interface_name") or f"{phys}.{vlan['id']}"
+    if vlan.get("untagged"):
+        name = vlan.get("interface_name") or phys
+        if name != phys:
+            raise SystemExit(
+                f"untagged interface_name must equal physical_interface {phys!r}, got {name!r}"
+            )
+    else:
+        name = vlan.get("interface_name") or f"{phys}.{vlan['id']}"
     if not IFACE_RE.match(name):
         raise SystemExit(f"invalid interface_name {name!r}")
     return name
@@ -94,6 +101,8 @@ def main() -> int:
 
     for label, v in (("mgmt", mgmt), ("control", control), ("dante", dante)):
         validate_ipv4(v["address"], f"{label}.address")
+        if v.get("untagged") and label != "mgmt":
+            raise SystemExit(f"{label}: untagged is only allowed on mgmt")
 
     i_mgmt = iface(mgmt, phys)
     i_control = iface(control, phys)

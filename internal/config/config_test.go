@@ -67,3 +67,111 @@ allowlist_files: []
 		t.Fatal("expected duplicate vlan id error")
 	}
 }
+
+func TestMgmtDHCPDisabledSkipsRangeValidation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "site.yaml")
+	content := `
+hostname: x
+physical_interface: eth0
+vlans:
+  mgmt: {id: 10, address: 10.10.0.50, prefix: 24}
+  control: {id: 20, address: 10.20.0.1, prefix: 24}
+  dante: {id: 30, address: 10.30.0.1, prefix: 24}
+mgmt_dhcp:
+  enabled: false
+allowlist_files: []
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	site, err := config.LoadSite(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if site.MgmtDHCP.IsEnabled() {
+		t.Fatal("expected mgmt_dhcp disabled")
+	}
+}
+
+func TestMgmtDHCPEnabledByDefault(t *testing.T) {
+	root := filepath.Join("..", "..", "config", "site.example.yaml")
+	site, err := config.LoadSite(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !site.MgmtDHCP.IsEnabled() {
+		t.Fatal("example site should leave DHCP enabled by default")
+	}
+}
+
+func TestMgmtUntaggedUsesPhysicalIface(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "site.yaml")
+	content := `
+hostname: x
+physical_interface: eth0
+vlans:
+  mgmt: {id: 1, address: 192.168.1.2, prefix: 24, untagged: true}
+  control: {id: 200, address: 10.200.0.1, prefix: 21}
+  dante: {id: 201, address: 10.201.0.1, prefix: 21}
+mgmt_dhcp:
+  enabled: false
+allowlist_files: []
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	site, err := config.LoadSite(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if site.MgmtIface() != "eth0" {
+		t.Fatalf("mgmt iface %s", site.MgmtIface())
+	}
+	if site.VLANs.Control.Iface("eth0") != "eth0.200" {
+		t.Fatalf("control iface %s", site.VLANs.Control.Iface("eth0"))
+	}
+}
+
+func TestRejectTaggedIfaceEqualPhysical(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "site.yaml")
+	content := `
+hostname: x
+physical_interface: eth0
+vlans:
+  mgmt: {id: 10, address: 10.10.0.1, prefix: 24, interface_name: eth0}
+  control: {id: 20, address: 10.20.0.1, prefix: 24}
+  dante: {id: 30, address: 10.30.0.1, prefix: 24}
+mgmt_dhcp: {enabled: false}
+allowlist_files: []
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.LoadSite(path); err == nil {
+		t.Fatal("expected error for tagged interface_name equal to physical_interface")
+	}
+}
+
+func TestRejectUntaggedControl(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "site.yaml")
+	content := `
+hostname: x
+physical_interface: eth0
+vlans:
+  mgmt: {id: 10, address: 10.10.0.1, prefix: 24}
+  control: {id: 20, address: 10.20.0.1, prefix: 24, untagged: true}
+  dante: {id: 30, address: 10.30.0.1, prefix: 24}
+mgmt_dhcp: {enabled: false}
+allowlist_files: []
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.LoadSite(path); err == nil {
+		t.Fatal("expected untagged control error")
+	}
+}

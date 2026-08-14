@@ -1,4 +1,4 @@
-.PHONY: build build-pi build-pi-arm test generate-check fmt
+.PHONY: build build-pi build-pi-arm test test-py lint-py fmt fmt-check generate-check check
 
 build:
 	mkdir -p bin
@@ -20,11 +20,25 @@ build-pi-arm:
 test:
 	go test ./...
 
+test-py:
+	python3 -m pytest
+
+lint-py:
+	python3 -m ruff check deploy/pi
+	python3 -m ruff format --check deploy/pi
+	python3 -m mypy
+
+fmt:
+	go fmt ./...
+	python3 -m ruff format deploy/pi
+
+fmt-check:
+	@test -z "$$(gofmt -l .)" || (echo "gofmt needed:" && gofmt -l . && exit 1)
+
 generate-check:
 	python3 deploy/pi/generate-nftables.py config/site.example.yaml /tmp/combiner-nftables.conf
 	python3 deploy/pi/generate-network-config.py config/site.example.yaml /tmp/combiner-net
 	@command -v nft >/dev/null && nft -c -f /tmp/combiner-nftables.conf || echo "nft not installed — skipped nft -c"
 	@echo "ok: generated /tmp/combiner-nftables.conf and /tmp/combiner-net"
 
-fmt:
-	go fmt ./...
+check: fmt-check test test-py lint-py generate-check build build-pi build-pi-arm

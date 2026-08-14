@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  go:
+    name: Go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: |
+          test -z "$(gofmt -l .)" || (echo "gofmt needed:" && gofmt -l . && exit 1)
+
+      - name: go test
+        run: go test ./...
+
+      - name: build
+        run: make build
+
+      - name: cross-build Pi
+        run: |
+          make build-pi
+          make build-pi-arm
+
+  python:
+    name: Python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: pip install "PyYAML>=6" "ruff>=0.8" "mypy>=1.13" "pytest>=8" "types-PyYAML>=6"
+
+      - name: ruff
+        run: |
+          python -m ruff check deploy/pi
+          python -m ruff format --check deploy/pi
+
+      - name: mypy
+        run: python -m mypy
+
+      - name: pytest
+        run: python -m pytest
+
+      - name: generate-check
+        run: make generate-check

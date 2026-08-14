@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vunet-dante-combiner-deploy"
+version = "0.0.0"
+description = "Deploy generators and quality tooling for the combiner"
+requires-python = ">=3.11"
+dependencies = ["PyYAML>=6"]
+
+[project.optional-dependencies]
+dev = [
+  "ruff>=0.8",
+  "mypy>=1.13",
+  "pytest>=8",
+  "types-PyYAML>=6",
+]
+
+[tool.setuptools]
+packages = []
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+src = ["deploy/pi"]
+extend-include = ["*.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.11"
+disallow_untyped_defs = true
+warn_return_any = true
+warn_unused_ignores = true
+files = [
+  "deploy/pi/generate-nftables.py",
+  "deploy/pi/generate-network-config.py",
+  "deploy/pi/tests",
+]
+
+[[tool.mypy.overrides]]
+module = "yaml"
+ignore_missing_imports = false
+
+[tool.pytest.ini_options]
+testpaths = ["deploy/pi/tests"]
+pythonpath = ["deploy/pi"]

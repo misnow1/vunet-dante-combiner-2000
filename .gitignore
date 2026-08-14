@@ -13,3 +13,14 @@ site.yaml
 
 # Go
 vendor/
+
+# Python
+.venv/
+.venv-tmp/
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+.eggs/

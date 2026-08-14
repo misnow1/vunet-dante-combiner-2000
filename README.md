@@ -45,6 +45,15 @@ make build-pi      # linux/arm64 — aarch64 Pi OS (lab: virgil01)
 make build-pi-arm  # linux/arm GOARM=7 — 32-bit Pi OS only
 ```
 
+## CI / quality
+
+GitHub Actions runs the same gates as `make check` (gofmt, Go tests/builds, ruff/mypy/pytest for deploy generators, `generate-check`):
+
+```bash
+pip install -e ".[dev]"   # PyYAML + ruff, mypy, pytest
+make check
+```
+
 ## Install (Pi)
 
 1. Prepare the board: [`docs/pi-prep.md`](docs/pi-prep.md)

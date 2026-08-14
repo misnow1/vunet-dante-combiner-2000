@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Any
 
 try:
     import yaml
@@ -20,15 +21,13 @@ def write(path: Path, content: str) -> None:
     print(f"wrote {path}")
 
 
-def role_iface(role: str, v: dict, phys: str) -> str:
+def role_iface(role: str, v: dict[str, Any], phys: str) -> str:
     if v.get("untagged"):
         if role != "mgmt":
             raise SystemExit("untagged is only allowed on vlans.mgmt")
         name = v.get("interface_name") or phys
         if name != phys:
-            raise SystemExit(
-                f"mgmt untagged interface_name must be {phys!r} (physical_interface), got {name!r}"
-            )
+            raise SystemExit(f"mgmt untagged interface_name must be {phys!r} (physical_interface), got {name!r}")
         return phys
     name = v.get("interface_name") or f"{phys}.{v['id']}"
     if name == phys:
@@ -47,7 +46,10 @@ def main() -> int:
     ap.add_argument("outdir", help="e.g. /etc or a staging directory")
     args = ap.parse_args()
 
-    site = yaml.safe_load(Path(args.site_yaml).read_text())
+    data = yaml.safe_load(Path(args.site_yaml).read_text())
+    if not isinstance(data, dict):
+        raise SystemExit(f"site config must be a mapping: {args.site_yaml}")
+    site: dict[str, Any] = data
     out = Path(args.outdir)
     phys = site["physical_interface"]
     host = site.get("hostname", "combiner")
@@ -86,7 +88,7 @@ Name={phys}
 
 [Network]
 Description=combiner mgmt (untagged/native) + trunk parent
-Address={mgmt['address']}/{mgmt['prefix']}
+Address={mgmt["address"]}/{mgmt["prefix"]}
 {vlan_lines}LinkLocalAddressing=no
 LLMNR=no
 ConfigureWithoutCarrier=yes
@@ -115,7 +117,7 @@ Name={ifname}
 Kind=vlan
 
 [VLAN]
-Id={v['id']}
+Id={v["id"]}
 """,
         )
         write(
@@ -124,8 +126,8 @@ Id={v['id']}
 Name={ifname}
 
 [Network]
-Description=combiner {role} VLAN {v['id']}
-Address={v['address']}/{v['prefix']}
+Description=combiner {role} VLAN {v["id"]}
+Address={v["address"]}/{v["prefix"]}
 LinkLocalAddressing=no
 ConfigureWithoutCarrier=yes
 {mgmt_extra if role == "mgmt" else ""}""",
@@ -150,8 +152,8 @@ ConfigureWithoutCarrier=yes
 interface={mgmt_if}
 bind-interfaces
 domain={domain}
-dhcp-range={dhcp['range_start']},{dhcp['range_end']},{dhcp['lease']}
-dhcp-option=option:router,{mgmt['address']}
+dhcp-range={dhcp["range_start"]},{dhcp["range_end"]},{dhcp["lease"]}
+dhcp-option=option:router,{mgmt["address"]}
 dhcp-option=option:dns-server
 no-resolv
 bogus-priv

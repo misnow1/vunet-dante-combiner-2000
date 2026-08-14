@@ -20,7 +20,9 @@ A portable Linux Mgmt-VLAN gateway so one control client (laptop or tablet) can 
 | [`docs/capture-playbook.md`](docs/capture-playbook.md) | How to capture VuNET/Lake groups on site |
 | [`docs/break-glass.md`](docs/break-glass.md) | What to do if the combiner dies |
 | [`docs/productization.md`](docs/productization.md) | PoE, enclosure, Sipeed eval, metering, ACLs |
+| [`docs/pi-prep.md`](docs/pi-prep.md) | Pi packages, Go toolchain, env vars, arm vs arm64 |
 | [`config/site.example.yaml`](config/site.example.yaml) | Site configuration example |
+| [`config/site.lab-flat.example.yaml`](config/site.lab-flat.example.yaml) | Lab config: untagged Mgmt on an existing flat LAN |
 | [`deploy/pi/`](deploy/pi/) | Raspberry Pi lab install profile |
 | [`cmd/combiner/`](cmd/combiner/) | Reflector + status HTTP service |
 | [`cmd/combiner-status/`](cmd/combiner-status/) | CLI health snapshot |
@@ -36,16 +38,17 @@ go build -o bin/combiner ./cmd/combiner
 go build -o bin/combiner-status ./cmd/combiner-status
 ```
 
-Cross-compile for Pi (`linux/arm64`):
+Cross-compile for Pi:
 
 ```bash
-GOOS=linux GOARCH=arm64 go build -o bin/combiner-linux-arm64 ./cmd/combiner
-GOOS=linux GOARCH=arm64 go build -o bin/combiner-status-linux-arm64 ./cmd/combiner-status
+make build-pi      # linux/arm64 — aarch64 Pi OS (lab: virgil01)
+make build-pi-arm  # linux/arm GOARM=7 — 32-bit Pi OS only
 ```
 
 ## Install (Pi)
 
-See [`deploy/pi/README.md`](deploy/pi/README.md).
+1. Prepare the board: [`docs/pi-prep.md`](docs/pi-prep.md)
+2. Run the installer: [`deploy/pi/README.md`](deploy/pi/README.md)
 
 ## Status page
 

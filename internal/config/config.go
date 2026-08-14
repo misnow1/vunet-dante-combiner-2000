@@ -44,9 +44,18 @@ type VLAN struct {
 	Address       string `yaml:"address"`
 	Prefix        int    `yaml:"prefix"`
 	InterfaceName string `yaml:"interface_name"`
+	// Untagged puts L3 on the physical NIC (native/PVID). Only allowed on mgmt.
+	Untagged bool `yaml:"untagged"`
+	// Gateway/DNS are lab conveniences for a Mgmt VLAN that has an uplink.
+	// Production Mgmt is isolated and needs neither. Only allowed on mgmt.
+	Gateway string   `yaml:"gateway"`
+	DNS     []string `yaml:"dns"`
 }
 
 func (v VLAN) Iface(phys string) string {
+	if v.Untagged {
+		return phys
+	}
 	if v.InterfaceName != "" {
 		return v.InterfaceName
 	}
@@ -63,10 +72,21 @@ func (v VLAN) Network() (*net.IPNet, error) {
 }
 
 type MgmtDHCP struct {
+	// Enabled defaults to true when omitted. Set false to skip dnsmasq
+	// (lab on a shared Mgmt LAN that already has DHCP).
+	Enabled    *bool  `yaml:"enabled"`
 	RangeStart string `yaml:"range_start"`
 	RangeEnd   string `yaml:"range_end"`
 	Lease      string `yaml:"lease"`
 	Domain     string `yaml:"domain"`
+}
+
+// IsEnabled reports whether Mgmt DHCP/dnsmasq should run (default true).
+func (d MgmtDHCP) IsEnabled() bool {
+	if d.Enabled == nil {
+		return true
+	}
+	return *d.Enabled
 }
 
 type Allowlist struct {
@@ -221,6 +241,30 @@ func (s *Site) validate() error {
 	var nets []*net.IPNet
 	for _, item := range vlans {
 		v := item.v
+		if v.Untagged && item.name != "mgmt" {
+			return fmt.Errorf("%s: untagged is only allowed on mgmt", item.name)
+		}
+		if v.Untagged && v.InterfaceName != "" && v.InterfaceName != s.PhysicalInterface {
+			return fmt.Errorf("mgmt: untagged interface_name must be omitted or equal physical_interface %q", s.PhysicalInterface)
+		}
+		// A tagged VLAN named after the NIC would make networkd treat the real
+		// link as a VLAN netdev and stop managing it.
+		if !v.Untagged && v.Iface(s.PhysicalInterface) == s.PhysicalInterface {
+			return fmt.Errorf("%s: interface_name must differ from physical_interface %q (use untagged: true on mgmt for a native VLAN)", item.name, s.PhysicalInterface)
+		}
+		if item.name != "mgmt" {
+			if v.Gateway != "" {
+				return fmt.Errorf("%s: gateway is only allowed on mgmt", item.name)
+			}
+			if len(v.DNS) > 0 {
+				return fmt.Errorf("%s: dns is only allowed on mgmt", item.name)
+			}
+		}
+		for _, d := range v.DNS {
+			if ip := net.ParseIP(d); ip == nil || ip.To4() == nil {
+				return fmt.Errorf("%s: dns %q must be IPv4", item.name, d)
+			}
+		}
 		if v.ID < 1 || v.ID > 4094 {
 			return fmt.Errorf("%s: invalid vlan id %d", item.name, v.ID)
 		}
@@ -257,10 +301,27 @@ func (s *Site) validate() error {
 		ifaces[ifi] = item.name
 	}
 
+	if gw := s.VLANs.Mgmt.Gateway; gw != "" {
+		ip := net.ParseIP(gw)
+		if ip == nil || ip.To4() == nil {
+			return fmt.Errorf("mgmt: gateway %q must be IPv4", gw)
+		}
+		mgmtNet, err := s.VLANs.Mgmt.Network()
+		if err != nil {
+			return err
+		}
+		if !mgmtNet.Contains(ip) {
+			return fmt.Errorf("mgmt: gateway %s outside mgmt subnet %s", gw, mgmtNet)
+		}
+	}
+
+	if !s.MgmtDHCP.IsEnabled() {
+		return nil
+	}
 	start := net.ParseIP(s.MgmtDHCP.RangeStart)
 	end := net.ParseIP(s.MgmtDHCP.RangeEnd)
 	if start == nil || end == nil || start.To4() == nil || end.To4() == nil {
-		return fmt.Errorf("mgmt_dhcp range must be IPv4")
+		return fmt.Errorf("mgmt_dhcp range must be IPv4 when enabled")
 	}
 	mgmtNet, _ := s.VLANs.Mgmt.Network()
 	if !mgmtNet.Contains(start) || !mgmtNet.Contains(end) {

@@ -62,7 +62,7 @@ The combiner must not become a sneaky bridge between Control and Dante. The meet
 | --- | --- |
 | Kernel (`nftables`, VLAN ifaces, ip_forward) | Unicast SNAT, isolation, hard drops, counters |
 | Userspace reflector | Join/reflect allowlisted multicast groups; inventory discovered peers |
-| `dnsmasq` | DHCP **only** on Mgmt |
+| `dnsmasq` | DHCP **only** on Mgmt (optional; `mgmt_dhcp.enabled: false` leaves an existing Mgmt DHCP alone) |
 
 ## Intentional routing authority
 

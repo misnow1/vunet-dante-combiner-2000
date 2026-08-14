@@ -15,20 +15,32 @@
       "required": ["mgmt", "control", "dante"],
       "additionalProperties": false,
       "properties": {
-        "mgmt": { "$ref": "#/$defs/vlan" },
+        "mgmt": { "$ref": "#/$defs/vlan_mgmt" },
         "control": { "$ref": "#/$defs/vlan" },
         "dante": { "$ref": "#/$defs/vlan" }
       }
     },
     "mgmt_dhcp": {
       "type": "object",
-      "required": ["range_start", "range_end", "lease"],
       "additionalProperties": false,
       "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "When false, install skips dnsmasq so an existing Mgmt DHCP server can stay in control."
+        },
         "range_start": { "type": "string" },
         "range_end": { "type": "string" },
         "lease": { "type": "string" },
         "domain": { "type": "string" }
+      },
+      "if": {
+        "properties": { "enabled": { "const": false } },
+        "required": ["enabled"]
+      },
+      "then": {},
+      "else": {
+        "required": ["range_start", "range_end", "lease"]
       }
     },
     "allowlist_files": {
@@ -56,6 +68,31 @@
         "address": { "type": "string" },
         "prefix": { "type": "integer", "minimum": 8, "maximum": 30 },
         "interface_name": { "type": "string" }
+      }
+    },
+    "vlan_mgmt": {
+      "type": "object",
+      "required": ["id", "address", "prefix"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "integer", "minimum": 1, "maximum": 4094 },
+        "address": { "type": "string" },
+        "prefix": { "type": "integer", "minimum": 8, "maximum": 30 },
+        "interface_name": { "type": "string" },
+        "untagged": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, Mgmt L3 is on physical_interface (native/PVID); Control and Dante stay tagged."
+        },
+        "gateway": {
+          "type": "string",
+          "description": "Lab only: default route for the combiner itself when Mgmt has an uplink. Production Mgmt is isolated and omits this."
+        },
+        "dns": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Lab only: resolvers for the combiner itself. Never advertised to Mgmt DHCP clients."
+        }
       }
     }
   }

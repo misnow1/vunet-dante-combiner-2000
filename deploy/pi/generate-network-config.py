@@ -20,6 +20,27 @@ def write(path: Path, content: str) -> None:
     print(f"wrote {path}")
 
 
+def role_iface(role: str, v: dict, phys: str) -> str:
+    if v.get("untagged"):
+        if role != "mgmt":
+            raise SystemExit("untagged is only allowed on vlans.mgmt")
+        name = v.get("interface_name") or phys
+        if name != phys:
+            raise SystemExit(
+                f"mgmt untagged interface_name must be {phys!r} (physical_interface), got {name!r}"
+            )
+        return phys
+    name = v.get("interface_name") or f"{phys}.{v['id']}"
+    if name == phys:
+        # A .netdev named after the physical NIC makes networkd treat the real
+        # link as a VLAN it must create, and it stops managing it entirely.
+        raise SystemExit(
+            f"{role}: interface_name must differ from physical_interface {phys!r}; "
+            "use vlans.mgmt.untagged: true for a native/untagged Mgmt VLAN"
+        )
+    return name
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("site_yaml")
@@ -31,28 +52,62 @@ def main() -> int:
     phys = site["physical_interface"]
     host = site.get("hostname", "combiner")
     vlans = site["vlans"]
-    dhcp = site["mgmt_dhcp"]
+    dhcp = site.get("mgmt_dhcp") or {}
+    dhcp_enabled = dhcp.get("enabled", True)
 
-    vlan_ifaces = []
+    mgmt = vlans["mgmt"]
+    mgmt_untagged = bool(mgmt.get("untagged"))
+    mgmt_if = role_iface("mgmt", mgmt, phys)
+
+    # Lab uplink only: production Mgmt is isolated and declares neither.
+    mgmt_extra = ""
+    if mgmt.get("gateway"):
+        mgmt_extra += f"Gateway={mgmt['gateway']}\n"
+    for d in mgmt.get("dns") or []:
+        mgmt_extra += f"DNS={d}\n"
+
+    tagged_ifaces: list[str] = []
     for role, v in vlans.items():
-        ifname = v.get("interface_name") or f"{phys}.{v['id']}"
-        vlan_ifaces.append(ifname)
+        if role == "mgmt" and v.get("untagged"):
+            continue
+        tagged_ifaces.append(role_iface(role, v, phys))
 
-    # Parent device — do not DHCP the trunk itself
-    write(
-        out / "systemd/network/10-combiner-trunk.network",
-        f"""[Match]
+    # VLAN= accepts exactly one netdev per assignment; a space-separated list is
+    # rejected outright ("Invalid netdev name in VLAN=") and no VLAN is created.
+    vlan_lines = "".join(f"VLAN={name}\n" for name in tagged_ifaces)
+
+    # Parent / trunk device
+    if mgmt_untagged:
+        # Native/untagged Mgmt on the physical NIC; Control+Dante stay tagged.
+        write(
+            out / "systemd/network/10-combiner-trunk.network",
+            f"""[Match]
 Name={phys}
 
 [Network]
-VLAN={' '.join(vlan_ifaces)}
-LinkLocalAddressing=no
+Description=combiner mgmt (untagged/native) + trunk parent
+Address={mgmt['address']}/{mgmt['prefix']}
+{vlan_lines}LinkLocalAddressing=no
+LLMNR=no
+ConfigureWithoutCarrier=yes
+{mgmt_extra}""",
+        )
+    else:
+        write(
+            out / "systemd/network/10-combiner-trunk.network",
+            f"""[Match]
+Name={phys}
+
+[Network]
+{vlan_lines}LinkLocalAddressing=no
 LLMNR=no
 """,
-    )
+        )
 
     for role, v in vlans.items():
-        ifname = v.get("interface_name") or f"{phys}.{v['id']}"
+        if role == "mgmt" and v.get("untagged"):
+            continue  # L3 lives on the parent unit above
+        ifname = role_iface(role, v, phys)
         write(
             out / f"systemd/network/20-combiner-{role}.netdev",
             f"""[NetDev]
@@ -71,29 +126,38 @@ Name={ifname}
 [Network]
 Description=combiner {role} VLAN {v['id']}
 Address={v['address']}/{v['prefix']}
-IPForward=yes
 LinkLocalAddressing=no
 ConfigureWithoutCarrier=yes
-""",
+{mgmt_extra if role == "mgmt" else ""}""",
         )
 
-    mgmt_if = vlans["mgmt"].get("interface_name") or f"{phys}.{vlans['mgmt']['id']}"
-    domain = dhcp.get("domain", "combiner.local")
+    # Markers consumed by install.sh
+    write(out / "combiner-mgmt-dhcp.enabled", "1\n" if dhcp_enabled else "0\n")
     write(
-        out / "dnsmasq.d/combiner-mgmt.conf",
-        f"""# Combiner Mgmt DHCP — do not enable DHCP on Control/Dante
+        out / "combiner-interfaces.txt",
+        "".join(f"{role} {role_iface(role, v, phys)}\n" for role, v in vlans.items()),
+    )
+
+    if dhcp_enabled:
+        domain = dhcp.get("domain", "combiner.local")
+        for key in ("range_start", "range_end", "lease"):
+            if key not in dhcp:
+                raise SystemExit(f"mgmt_dhcp.{key} required when mgmt_dhcp.enabled is true")
+        write(
+            out / "dnsmasq.d/combiner-mgmt.conf",
+            f"""# Combiner Mgmt DHCP — do not enable DHCP on Control/Dante
 # No DNS on Mgmt by design (option 6 empty) — use combiner Mgmt IP for status page.
 interface={mgmt_if}
 bind-interfaces
 domain={domain}
 dhcp-range={dhcp['range_start']},{dhcp['range_end']},{dhcp['lease']}
-dhcp-option=option:router,{vlans['mgmt']['address']}
+dhcp-option=option:router,{mgmt['address']}
 dhcp-option=option:dns-server
 no-resolv
 bogus-priv
 domain-needed
 """,
-    )
+        )
 
     write(
         out / "hostname.combiner",

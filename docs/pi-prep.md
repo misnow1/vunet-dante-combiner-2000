@@ -2,20 +2,21 @@
 
 Lab bring-up for Debian / Raspberry Pi OS before running [`deploy/pi/install.sh`](../deploy/pi/install.sh).
 
-**Lab board:** Raspberry Pi **3** `virgil01` at `192.168.1.2`, running **64-bit** Raspberry Pi OS (`uname -m` → `aarch64`). Use **`make build-pi`** (`linux/arm64`). Prefer Pi **4/5** later for trunked / GbE work; Pi 3 is 100 Mbps Ethernet and short on RAM for on-device `go build`.
+**Lab board:** Raspberry Pi **3** `virgil01` at `192.168.1.2`, running **64-bit** Raspberry Pi OS (`uname -m` → `aarch64`). Prefer the **`linux-arm64` release tarball**, or **`make build-pi`** when developing. Prefer Pi **4/5** later for trunked / GbE work; Pi 3 is 100 Mbps Ethernet and short on RAM for on-device `go build`.
 
-## Two ways to get binaries onto the Pi
+## Ways to get binaries onto the Pi
 
 | Approach | When to use | Go on the Pi? |
 | --- | --- | --- |
-| **A. Cross-compile on a laptop** (recommended) | Normal path; Pi 3 has little RAM for `go build` | **No** |
+| **C. Download a GitHub release** (recommended) | Lab / field install; no toolchain needed | **No** |
+| **A. Cross-compile on a laptop** | Developing before a release exists | **No** |
 | **B. Build on the Pi** | Convenience if you already develop on-device | **Yes** |
 
-Runtime packages (nftables, dnsmasq, etc.) are required either way. The installer installs most of them; this doc lists what to have ready and how to build.
+Runtime packages (nftables, dnsmasq, etc.) are required either way. The installer installs most of them; this doc lists what to have ready and how to get binaries.
 
 ---
 
-## Architecture (arm vs arm64)
+## Architecture (arm64 / arm / amd64)
 
 On the Pi:
 
@@ -25,12 +26,33 @@ dpkg --print-architecture
 getconf LONG_BIT
 ```
 
-| Result | Typical Pi OS | Cross-compile |
+| Result | Typical OS | Release asset / cross-compile |
 | --- | --- | --- |
-| `aarch64` / `arm64`, 64-bit | 64-bit Raspberry Pi OS (**lab: `virgil01`**) | `make build-pi` → `GOOS=linux GOARCH=arm64` |
-| `armv7l` / `armhf`, 32-bit | Older 32-bit Pi OS images | `make build-pi-arm` → `GOOS=linux GOARCH=arm GOARM=7` |
+| `aarch64` / `arm64`, 64-bit | 64-bit Raspberry Pi OS (**lab: `virgil01`**) | `*-linux-arm64.tar.gz` / `make build-pi` |
+| `armv7l` / `armhf`, 32-bit | Older 32-bit Pi OS images | `*-linux-arm.tar.gz` / `make build-pi-arm` |
+| `x86_64` / `amd64` | Debian/Ubuntu x86_64 | `*-linux-amd64.tar.gz` / `make build-linux-amd64` |
 
 Match the binary to the OS. A `linux/arm` binary will not run on `aarch64` Pi OS (and vice versa).
+
+---
+
+## Download a release (approach C)
+
+1. Open [Releases](https://github.com/misnow1/vunet-dante-combiner-2000/releases) and download the tarball for your arch (plus `SHA256SUMS` if you want to verify).
+2. On the Pi:
+
+```bash
+# Example for virgil01 / aarch64 — replace VERSION (no leading v)
+curl -fsSL -o combiner.tgz \
+  https://github.com/misnow1/vunet-dante-combiner-2000/releases/download/vVERSION/vunet-dante-combiner-VERSION-linux-arm64.tar.gz
+tar -xzf combiner.tgz
+cd vunet-dante-combiner-VERSION-linux-arm64
+# optional: sha256sum -c SHA256SUMS  (if you also downloaded SHA256SUMS into this directory's parent)
+```
+
+The tree already has `bin/combiner`, `bin/combiner-status`, `config/`, and `deploy/pi/`. Continue with site config and [`../deploy/pi/README.md`](../deploy/pi/README.md).
+
+Maintainers publish packages by pushing a tag: `git tag v0.1.0 && git push origin v0.1.0`.
 
 ---
 
@@ -128,16 +150,15 @@ make build-pi
 # Only if uname -m is armv7l / armhf
 make build-pi-arm
 # → bin/combiner-linux-arm , bin/combiner-status-linux-arm
+
+# x86_64 Linux hosts
+make build-linux-amd64
+
+# Or build all release tarballs locally
+make package VERSION=0.0.0-dev
 ```
 
-Equivalent manual command for the lab Pi:
-
-```bash
-GOOS=linux GOARCH=arm64 go build -o bin/combiner-linux-arm64 ./cmd/combiner
-GOOS=linux GOARCH=arm64 go build -o bin/combiner-status-linux-arm64 ./cmd/combiner-status
-```
-
-Copy to `virgil01`. `install.sh` expects plain names `bin/combiner` and `bin/combiner-status` when `go` is not on the Pi:
+Copy to `virgil01`. `install.sh` expects plain names `bin/combiner` and `bin/combiner-status` (release packages already use those names):
 
 ```bash
 # From laptop
@@ -151,7 +172,9 @@ mv ~/combiner ~/combiner-status ~/vunet-dante-combiner-2000/bin/
 
 ---
 
-## Get the repo onto the Pi
+## Get sources onto the Pi (approaches A / B)
+
+Prefer a [release tarball](#download-a-release-approach-c) for installs. For development:
 
 ```bash
 # On the Pi
@@ -160,7 +183,7 @@ git clone https://github.com/misnow1/vunet-dante-combiner-2000.git
 cd vunet-dante-combiner-2000
 ```
 
-Or rsync/scp from your laptop. Then either build on-device or drop prebuilt binaries into `bin/`.
+Or rsync/scp from your laptop. Then either build on-device or drop prebuilt binaries into `bin/`. `install.sh` prefers existing `bin/` executables and only runs `go build` if they are missing.
 
 ---
 
@@ -168,7 +191,7 @@ Or rsync/scp from your laptop. Then either build on-device or drop prebuilt bina
 
 For first smoke tests on a single LAN (`virgil01` at `192.168.1.2`), you still need three **VLAN IDs** on a trunk to exercise the full installer. Until the switch is ready:
 
-1. Cross-compile / copy binaries and run `combiner -check -config config/site.example.yaml`
+1. Use a release tree or cross-compiled binaries and run `./bin/combiner -check -config config/site.example.yaml`
 2. Generate nftables only: `python3 deploy/pi/generate-nftables.py config/site.example.yaml /tmp/nft.conf && sudo nft -c -f /tmp/nft.conf`
 3. Do **not** run full `install.sh` over SSH without `--i-have-console` — it rewrites networking
 
@@ -181,7 +204,7 @@ Edit `config/site.example.yaml` → `/etc/combiner/site.yaml` with real VLAN IDs
 - [ ] OS architecture known; binaries match (`arm64` for `virgil01` / `aarch64`)
 - [ ] `python3` + `python3-yaml` available
 - [ ] `nft` available (`nftables` package)
-- [ ] Repo present; `bin/combiner` and `bin/combiner-status` exist **or** `go` can build them
+- [ ] Release tree **or** repo with `bin/combiner` + `bin/combiner-status` (or `go` to build them)
 - [ ] `/etc/combiner/site.yaml` edited for this site
 - [ ] Local console available (or you accept `--i-have-console` over SSH knowing you may lock yourself out)
 - [ ] Switch trunk prepared for Mgmt + Control + Dante tags

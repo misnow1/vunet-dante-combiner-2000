@@ -9,7 +9,7 @@ Installs VLAN interfaces, optional Mgmt DHCP (`dnsmasq`), fail-closed `nftables`
 - **Local console** (serial/HDMI) recommended — install disables NetworkManager/dhcpcd
 - Edited `/etc/combiner/site.yaml` (start from `config/site.example.yaml`)
 
-**First-time Pi setup** (packages, Go, `GOOS`/`GOARCH`, cross-compile vs on-device build): see **[`docs/pi-prep.md`](../../docs/pi-prep.md)**.
+**First-time Pi setup** (release download, packages, optional Go): see **[`docs/pi-prep.md`](../../docs/pi-prep.md)**.
 
 ### Shared Mgmt LAN (existing DHCP)
 
@@ -49,11 +49,31 @@ Reserve the Mgmt address in the LAN router so nothing else claims it.
 
 ## Install
 
+**From a GitHub release** (preferred — no Go on the Pi):
+
+```bash
+# On the Pi — pick arm64 / arm / amd64 to match uname -m; replace VERSION (no leading v)
+curl -fsSL -o combiner.tgz \
+  https://github.com/misnow1/vunet-dante-combiner-2000/releases/download/vVERSION/vunet-dante-combiner-VERSION-linux-arm64.tar.gz
+tar -xzf combiner.tgz
+cd vunet-dante-combiner-VERSION-linux-arm64
+
+sudo mkdir -p /etc/combiner
+sudo cp config/site.example.yaml /etc/combiner/site.yaml   # or site.lab-flat.example.yaml
+# edit /etc/combiner/site.yaml
+sudo ./deploy/pi/install.sh /etc/combiner/site.yaml --i-have-console
+```
+
+`install.sh` uses the prebuilt `bin/` binaries and does not require Go.
+
+**From a git checkout** (dev / cross-compile):
+
 ```bash
 sudo mkdir -p /etc/combiner
 sudo cp config/site.example.yaml /etc/combiner/site.yaml   # or site.lab-flat.example.yaml
 sudo cp -r config/allowlists /etc/combiner/
 # edit /etc/combiner/site.yaml
+# ensure bin/combiner and bin/combiner-status exist (release package, make build-pi, or go on PATH)
 sudo ./deploy/pi/install.sh /etc/combiner/site.yaml --i-have-console
 ```
 

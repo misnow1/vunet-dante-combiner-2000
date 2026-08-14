@@ -138,11 +138,15 @@ hostnamectl set-hostname "$HOSTNAME" 2>/dev/null || hostname "$HOSTNAME"
 
 BIN_DIR="$ROOT/bin"
 mkdir -p "$BIN_DIR"
-if command -v go >/dev/null 2>&1; then
-  (cd "$ROOT" && go build -o "$BIN_DIR/combiner" ./cmd/combiner && go build -o "$BIN_DIR/combiner-status" ./cmd/combiner-status)
+# Prefer release / prebuilt binaries; only compile when either is missing.
+if [[ ! -x "$BIN_DIR/combiner" || ! -x "$BIN_DIR/combiner-status" ]]; then
+  if command -v go >/dev/null 2>&1; then
+    (cd "$ROOT" && go build -o "$BIN_DIR/combiner" ./cmd/combiner && go build -o "$BIN_DIR/combiner-status" ./cmd/combiner-status)
+  fi
 fi
-if [[ ! -x "$BIN_DIR/combiner" ]]; then
-  echo "missing $BIN_DIR/combiner — build on a machine with Go and copy binaries" >&2
+if [[ ! -x "$BIN_DIR/combiner" || ! -x "$BIN_DIR/combiner-status" ]]; then
+  echo "missing $BIN_DIR/combiner and/or $BIN_DIR/combiner-status" >&2
+  echo "download a release tarball, or build with Go and place binaries in bin/" >&2
   exit 1
 fi
 install -m 0755 "$BIN_DIR/combiner" /usr/local/bin/combiner

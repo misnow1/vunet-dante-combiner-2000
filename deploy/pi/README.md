@@ -1,19 +1,57 @@
 # Raspberry Pi lab deploy
 
-Installs VLAN interfaces, Mgmt DHCP (`dnsmasq`), fail-closed `nftables`, and the `combiner` service on Debian / Raspberry Pi OS.
+Installs VLAN interfaces, optional Mgmt DHCP (`dnsmasq`), fail-closed `nftables`, and the `combiner` service on Debian / Raspberry Pi OS.
 
 ## Prerequisites
 
-- Raspberry Pi with GbE (Pi 4/5 recommended)
+- Raspberry Pi with GbE (Pi 4/5 recommended; Pi 3 OK for early lab)
 - Switch trunk port carrying Mgmt + Control + Dante tags
 - **Local console** (serial/HDMI) recommended — install disables NetworkManager/dhcpcd
 - Edited `/etc/combiner/site.yaml` (start from `config/site.example.yaml`)
+
+**First-time Pi setup** (packages, Go, `GOOS`/`GOARCH`, cross-compile vs on-device build): see **[`docs/pi-prep.md`](../../docs/pi-prep.md)**.
+
+### Shared Mgmt LAN (existing DHCP)
+
+If Mgmt already has a DHCP server (typical home/lab LAN), set in `site.yaml`:
+
+```yaml
+mgmt_dhcp:
+  enabled: false
+```
+
+The installer then skips starting `dnsmasq` and removes `/etc/dnsmasq.d/combiner-mgmt.conf`. Keep a **static** `vlans.mgmt.address` that does not collide with the foreign pool. Omit or leave `range_*` unused when disabled.
+
+Default is `enabled: true` (dedicated combiner Mgmt VLAN).
+
+### Untagged Mgmt (native VLAN / flat lab LAN)
+
+Production expects Mgmt tagged on the trunk. For lab boards on an access/native port (e.g. `virgil01` on `192.168.1.x`), use [`config/site.lab-flat.example.yaml`](../../config/site.lab-flat.example.yaml):
+
+```yaml
+vlans:
+  mgmt:
+    id: 1                    # switch PVID / native VLAN id (docs + uniqueness)
+    address: 192.168.1.2
+    prefix: 24
+    untagged: true
+    gateway: 192.168.1.1     # lab only — see below
+    dns: [192.168.1.1]
+  control: { ... }           # still tagged eth0.<id>
+  dante: { ... }
+```
+
+Mgmt L3 lands on `physical_interface` (no `eth0.<mgmt-id>`); Control and Dante stay 802.1Q subinterfaces. Switch port: untagged Mgmt + tagged Control/Dante, or a temporary access port for Mgmt-only smoke tests.
+
+**`gateway` / `dns` are lab-only.** Once `systemd-networkd` takes over the NIC with a *static* Mgmt address, the previous DHCP default route is gone — without `gateway` the Pi keeps LAN access but loses its uplink (apt, DNS). Production Mgmt is isolated and omits both; these values configure the combiner itself and are never advertised to Mgmt DHCP clients.
+
+Reserve the Mgmt address in the LAN router so nothing else claims it.
 
 ## Install
 
 ```bash
 sudo mkdir -p /etc/combiner
-sudo cp config/site.example.yaml /etc/combiner/site.yaml
+sudo cp config/site.example.yaml /etc/combiner/site.yaml   # or site.lab-flat.example.yaml
 sudo cp -r config/allowlists /etc/combiner/
 # edit /etc/combiner/site.yaml
 sudo ./deploy/pi/install.sh /etc/combiner/site.yaml --i-have-console
@@ -28,18 +66,65 @@ Without `--i-have-console`, the script refuses to run over SSH (it would lock yo
 3. Loads a bootstrap **forward drop** ruleset, then the real ruleset
 4. Flushes conntrack
 5. Configures VLANs / dnsmasq / combiner
-6. **Enables IP forwarding last**
+6. **Waits for every interface named in `site.yaml` to exist** — aborts with diagnostics if not
+7. **Enables IP forwarding last**
+8. Confirms `combiner` is still active a few seconds after start
 
-Avahi is disabled/masked so it does not fight the reflector on UDP 5353.
+Avahi is disabled/masked so it does not fight the reflector on UDP 5353. The install aborts if `NetworkManager` or `dhcpcd` survive the disable step, since either one silently prevents `systemd-networkd` from creating VLANs.
+
+## Troubleshooting
+
+**No VLAN interfaces after install (`ip -br addr` shows only `eth0`)**
+
+```bash
+systemctl is-active systemd-networkd NetworkManager dhcpcd
+networkctl list
+journalctl -u systemd-networkd -b --no-pager | tail -40
+lsmod | grep 8021q
+ls /etc/systemd/network/
+```
+
+Read the networkd journal first — it names the failing line and file. Causes seen so far:
+
+1. **`Invalid netdev name in VLAN=`** — `VLAN=` accepts one netdev per assignment, so the generator writes a separate `VLAN=` line per interface. A space-separated list makes networkd discard the assignment and create nothing.
+2. **`Could not process new link message for netdev` on the physical NIC, link shown as `unmanaged`** — a `.netdev` named after the physical interface makes networkd treat the real link as a VLAN it must create. That happens with `interface_name: eth0` on a tagged VLAN (now rejected) or a stale unit from an earlier run. The installer deletes `/etc/systemd/network/*combiner*` before writing; clear leftovers by hand if you generated units another way.
+3. **A competing manager still owns the NIC** — `eth0` showing a `dynamic noprefixroute` address means NetworkManager/dhcpcd is still in charge. `sudo systemctl disable --now NetworkManager dhcpcd`, then re-run.
+4. **Missing `8021q`** — `sudo modprobe 8021q` must succeed; the installer aborts if it does not.
+
+Per-interface `IPForward=` is intentionally absent from the generated units: it is deprecated in current systemd, and forwarding is owned by `/etc/sysctl.d/99-combiner.conf`, applied only after the ruleset is live.
+
+Control/Dante interfaces existing but staying `no-carrier` is expected until the switch port is a real trunk.
+
+**`combiner` not running**
+
+```bash
+systemctl status combiner --no-pager
+journalctl -u combiner -b --no-pager | tail -40
+combiner -check -config /etc/combiner/site.yaml
+```
+
+The service exits when a configured interface is absent, so fix the interfaces first. `status=226/NAMESPACE` instead means a sandbox path in the unit does not exist — the unit reads dnsmasq leases but never writes them, so it declares no `ReadWritePaths` (`ProtectSystem=strict` already leaves the filesystem readable).
+
+**DNS broken on the Pi, `resolvectl` hangs**
+
+```bash
+systemctl is-active systemd-resolved
+ls -l /etc/resolv.conf
+sudo systemctl enable --now systemd-resolved
+```
+
+Installing `systemd-resolved` repoints `/etc/resolv.conf` at `/run/systemd/resolve/stub-resolv.conf`, which exists only while resolved runs; otherwise every lookup fails and `resolvectl` blocks on D-Bus activation until it times out. The installer only pulls resolved in when `vlans.mgmt.dns` is set, starts it explicitly, and warns if it is installed but inactive.
 
 ## Switch port
 
-Configure the Pi’s switch port as a **trunk** with tagged Mgmt, Control, and Dante. Put the **WAP** on an access port **untagged Mgmt** only.
+**Production:** trunk with tagged Mgmt, Control, and Dante. Put the **WAP** on an access port **untagged Mgmt** only.
+
+**Lab (untagged Mgmt):** set `vlans.mgmt.untagged: true`. Switch port carries untagged/PVID Mgmt plus tagged Control and Dante (or access-only Mgmt for early bring-up).
 
 ## Mgmt clients
 
-- DHCP from the combiner; gateway = combiner Mgmt IP
-- **No DNS** on Mgmt (by design) — open status at `http://<mgmt-ip>:8080/`
+- When `mgmt_dhcp.enabled` is true (default): DHCP from the combiner; gateway = combiner Mgmt IP; **no DNS** — open status at `http://<mgmt-ip>:8080/`
+- When `mgmt_dhcp.enabled` is false: use the existing LAN DHCP/static addressing; status still at `http://<mgmt-ip>:8080/`
 - `combiner.local` is not provided unless you add your own mDNS elsewhere
 
 ## Verify

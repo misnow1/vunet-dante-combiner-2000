@@ -37,9 +37,18 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-apt-get install -y dnsmasq nftables python3-yaml iproute2 conntrack
+apt-get install -y nftables python3-yaml iproute2 conntrack
 
-modprobe 8021q || true
+DHCP_ENABLED="$(python3 -c 'import yaml,sys; d=yaml.safe_load(open(sys.argv[1])).get("mgmt_dhcp") or {}; print("1" if d.get("enabled", True) else "0")' "$SITE_YAML")"
+if [[ "$DHCP_ENABLED" == "1" ]]; then
+  apt-get install -y dnsmasq
+fi
+
+# VLAN support is mandatory: Control and Dante are always tagged.
+if ! modprobe 8021q; then
+  echo "cannot load 8021q — kernel has no VLAN support, aborting" >&2
+  exit 1
+fi
 echo 8021q >/etc/modules-load.d/combiner-8021q.conf
 
 # Avoid conflict with combiner mDNS reflector on udp/5353
@@ -93,18 +102,35 @@ conntrack -F 2>/dev/null || true
 
 python3 "$ROOT/deploy/pi/generate-network-config.py" "$SITE_YAML" "$STAGING"
 
-apt-get install -y systemd-resolved || true
+# networkd only hands DNS= to systemd-resolved, so install it just for the lab
+# uplink case. Installing it rewrites /etc/resolv.conf as a symlink to its stub,
+# which leaves the box with no DNS at all if resolved is not actually running.
+MGMT_DNS_COUNT="$(python3 -c 'import yaml,sys; print(len((yaml.safe_load(open(sys.argv[1]))["vlans"]["mgmt"].get("dns") or [])))' "$SITE_YAML")"
+if [[ "$MGMT_DNS_COUNT" -gt 0 ]]; then
+  apt-get install -y systemd-resolved || true
+fi
+if [[ -e /usr/lib/systemd/system/systemd-resolved.service ]]; then
+  systemctl enable --now systemd-resolved || true
+fi
+
 systemctl enable systemd-networkd
 systemctl disable --now NetworkManager 2>/dev/null || true
 systemctl disable --now dhcpcd 2>/dev/null || true
 
-cp -a "$STAGING/systemd/network/." /etc/systemd/network/
+# A surviving network manager silently fights networkd and VLANs never appear.
+for svc in NetworkManager dhcpcd; do
+  if systemctl is-active --quiet "$svc" 2>/dev/null; then
+    echo "$svc is still active and will fight systemd-networkd — aborting" >&2
+    echo "stop it manually (systemctl disable --now $svc) and re-run" >&2
+    exit 1
+  fi
+done
 
-mkdir -p /etc/dnsmasq.d
-if [[ -f /etc/dnsmasq.conf ]]; then
-  sed -i 's/^#\?bind-interfaces.*/bind-interfaces/' /etc/dnsmasq.conf || true
-fi
-cp "$STAGING/dnsmasq.d/combiner-mgmt.conf" /etc/dnsmasq.d/combiner-mgmt.conf
+mkdir -p /etc/systemd/network
+# Drop units from earlier runs first: a leftover .netdev whose Name matches a
+# renamed or now-untagged interface keeps networkd from managing that link.
+rm -f /etc/systemd/network/*combiner*.netdev /etc/systemd/network/*combiner*.network
+cp -a "$STAGING/systemd/network/." /etc/systemd/network/
 
 HOSTNAME="$(python3 -c 'import yaml,sys; print(yaml.safe_load(open(sys.argv[1])).get("hostname") or "combiner")' "$SITE_YAML")"
 echo "$HOSTNAME" >/etc/hostname
@@ -124,10 +150,57 @@ install -m 0755 "$BIN_DIR/combiner-status" /usr/local/bin/combiner-status
 install -m 0644 "$ROOT/deploy/pi/systemd/combiner.service" /etc/systemd/system/combiner.service
 
 systemctl daemon-reload
-systemctl enable nftables dnsmasq combiner
+systemctl enable nftables combiner
 systemctl restart systemd-networkd
+networkctl reload 2>/dev/null || true
 systemctl restart nftables
-systemctl restart dnsmasq
+
+# systemd-networkd starting is not proof it configured anything — verify the
+# interfaces named in site.yaml actually exist before claiming success.
+networkd_diagnostics() {
+  echo "--- networkctl list ---" >&2
+  networkctl list --no-pager 2>&1 >&2 || true
+  echo "--- journalctl -u systemd-networkd (last 40) ---" >&2
+  journalctl -u systemd-networkd -b --no-pager -n 40 2>&1 >&2 || true
+  echo "--- ip -br addr ---" >&2
+  ip -br addr >&2 || true
+}
+
+MISSING=""
+for _ in $(seq 1 15); do
+  MISSING=""
+  while read -r role ifname; do
+    [[ -z "$ifname" ]] && continue
+    if [[ ! -e "/sys/class/net/$ifname" ]]; then
+      MISSING+="$role=$ifname "
+    fi
+  done <"$STAGING/combiner-interfaces.txt"
+  [[ -z "$MISSING" ]] && break
+  sleep 2
+done
+
+if [[ -n "$MISSING" ]]; then
+  echo "systemd-networkd did not create: $MISSING" >&2
+  echo "forwarding is still OFF; combiner not started" >&2
+  echo "if Mgmt should be native/untagged on $(python3 -c 'import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))["physical_interface"])' "$SITE_YAML"), set vlans.mgmt.untagged: true in $SITE_YAML" >&2
+  networkd_diagnostics
+  exit 1
+fi
+
+# Mgmt DHCP: enable dnsmasq only when site.yaml mgmt_dhcp.enabled is true (default).
+if [[ "$(cat "$STAGING/combiner-mgmt-dhcp.enabled")" == "1" ]]; then
+  mkdir -p /etc/dnsmasq.d
+  if [[ -f /etc/dnsmasq.conf ]]; then
+    sed -i 's/^#\?bind-interfaces.*/bind-interfaces/' /etc/dnsmasq.conf || true
+  fi
+  cp "$STAGING/dnsmasq.d/combiner-mgmt.conf" /etc/dnsmasq.d/combiner-mgmt.conf
+  systemctl enable dnsmasq
+  systemctl restart dnsmasq
+else
+  rm -f /etc/dnsmasq.d/combiner-mgmt.conf
+  systemctl disable --now dnsmasq 2>/dev/null || true
+  echo "mgmt_dhcp.enabled=false — dnsmasq not started (existing Mgmt DHCP left alone)"
+fi
 
 # Enable forwarding ONLY after rules are live
 cat >/etc/sysctl.d/99-combiner.conf <<'EOF'
@@ -141,5 +214,25 @@ sysctl --system >/dev/null
 
 systemctl restart combiner
 
+# Type=simple means restart returns 0 even if combiner exits immediately.
+sleep 3
+if ! systemctl is-active --quiet combiner; then
+  echo "combiner failed to stay running:" >&2
+  journalctl -u combiner -b --no-pager -n 40 >&2 || true
+  exit 1
+fi
+
+# A dangling /etc/resolv.conf stub symlink breaks name resolution for the whole
+# box and makes resolvectl hang on D-Bus activation.
+if [[ -e /usr/lib/systemd/system/systemd-resolved.service ]] && ! systemctl is-active --quiet systemd-resolved; then
+  echo "warning: systemd-resolved is installed but not running" >&2
+  echo "  /etc/resolv.conf may point at its unavailable stub — DNS will fail" >&2
+  echo "  fix with: systemctl enable --now systemd-resolved" >&2
+fi
+
 echo "Install complete. Run: combiner-status"
-echo "Status: http://<mgmt-ip>:8080/  (no DNS on Mgmt by design; use IP)"
+if [[ "$DHCP_ENABLED" == "1" ]]; then
+  echo "Status: http://<mgmt-ip>:8080/  (no DNS on Mgmt by design; use IP)"
+else
+  echo "Status: http://<mgmt-ip>:8080/  (Mgmt DHCP disabled; use a static/existing address)"
+fi

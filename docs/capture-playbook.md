@@ -93,6 +93,14 @@ groups:
     proto: udp
     direction: both   # mgmt<->control
     notes: captured YYYY-MM-DD; VuNET unicast uses payload|source IP (pick one)
+
+  # Multiple addresses/ports expand to a cartesian product:
+  # - name: example-multi
+  #   addresses: [239.1.1.1, 239.1.1.2]
+  #   port: 1000
+  #   port_end: 1002
+  # Or list ports explicitly (mutually exclusive with port/port_end):
+  #   ports: [1000, 1001, 1002]
 ```
 
 Also note unicast ports used after discovery (for optional nftables tightening later).

@@ -13,7 +13,7 @@ DEPLOY_PI = Path(__file__).resolve().parents[1]
 NFT_SCRIPT = DEPLOY_PI / "generate-nftables.py"
 NET_SCRIPT = DEPLOY_PI / "generate-network-config.py"
 
-FLOOR_MARKERS = [
+DENY_MARKERS = [
     "224.0.1.128/30",
     "224.0.1.132/32",
     "239.255.0.0/16",
@@ -73,7 +73,7 @@ def test_nftables_invariants(
     assert f"snat to {control_addr}" in text
     assert f"snat to {dante_addr}" in text
     assert f'iifname "{mgmt_if}"' in text
-    for p in FLOOR_MARKERS:
+    for p in DENY_MARKERS:
         assert p in text
     assert "policy drop" in text
     assert "ip daddr 224.0.0.0/4 counter name drop_forward_mcast drop" in text

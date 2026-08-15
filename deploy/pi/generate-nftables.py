@@ -27,15 +27,6 @@ except ImportError:
 
 IFACE_RE = re.compile(r"^[A-Za-z0-9._-]{1,15}$")
 
-# Non-overridable floor — always denied toward Mgmt/Control (unioned with site.yaml).
-FLOOR_DENY_PREFIXES = [
-    "224.0.1.128/30",  # PTP 224.0.1.128-131 (covers 129-131)
-    "224.0.1.132/32",  # PTP 224.0.1.132
-    "239.255.0.0/16",  # Dante ATP media
-    "239.69.0.0/16",  # AES67 media
-    "239.254.3.3/32",  # PTP logging
-]
-
 
 def load_site(path: Path) -> dict[str, Any]:
     with path.open() as f:
@@ -61,16 +52,22 @@ def normalize_prefix(p: str) -> str:
     net = ipaddress.ip_network(p, strict=False)
     if not isinstance(net, ipaddress.IPv4Network):
         raise SystemExit(f"deny prefix must be IPv4: {p}")
+    if not net.is_multicast:
+        raise SystemExit(f"deny prefix must be multicast: {p}")
     return str(net)
 
 
-def merge_deny_prefixes(site: dict[str, Any]) -> list[str]:
-    raw = list(FLOOR_DENY_PREFIXES)
-    raw.extend(site.get("deny_multicast_prefixes") or [])
+def deny_prefixes_from_site(site: dict[str, Any]) -> list[str]:
+    """Load deny_multicast_prefixes from site.yaml — sole source of truth for nft denies."""
+    raw = site.get("deny_multicast_prefixes")
+    if not raw:
+        raise SystemExit("deny_multicast_prefixes required (non-empty) in site.yaml")
+    if not isinstance(raw, list):
+        raise SystemExit("deny_multicast_prefixes must be a list")
     seen: set[str] = set()
     out: list[str] = []
     for p in raw:
-        n = normalize_prefix(p)
+        n = normalize_prefix(str(p))
         if n not in seen:
             seen.add(n)
             out.append(n)
@@ -115,7 +112,7 @@ def main() -> int:
     if len({mgmt["id"], control["id"], dante["id"]}) != 3:
         raise SystemExit("mgmt/control/dante VLAN IDs must be distinct")
 
-    deny_prefixes = merge_deny_prefixes(site)
+    deny_prefixes = deny_prefixes_from_site(site)
     all_if = f'{{ "{i_mgmt}", "{i_control}", "{i_dante}" }}'
     mgmt_ctrl = f'{{ "{i_mgmt}", "{i_control}" }}'
 

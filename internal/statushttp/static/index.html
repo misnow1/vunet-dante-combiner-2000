@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Combiner Status</title>
+<link rel="stylesheet" href="/static/app.css"/>
+</head>
+<body>
+<header>
+  <div>
+    <h1 id="title">Combiner</h1>
+    <div class="sub" id="when"></div>
+  </div>
+  <div class="hdr-controls">
+    <label title="Poll /api/status every 5 seconds">
+      <input type="checkbox" id="auto-refresh" checked/>
+      Auto-refresh (5s)
+    </label>
+    <button type="button" id="refresh-now" title="Fetch status once">Refresh</button>
+    <a href="/api/status">/api/status</a>
+  </div>
+</header>
+<main>
+  <div class="grid" id="ifaces"></div>
+  <div class="grid">
+    <section><h2>nftables counters</h2><p class="hint">Kernel drops and SNAT. Non-zero PTP/media drops on a live Dante network are healthy.</p><div id="nft"></div></section>
+    <section><h2>Reflector</h2><p class="hint">Userspace multicast reflector between Mgmt and Control/Dante. Kernel never forwards multicast.</p><div id="ref"></div></section>
+  </div>
+  <section>
+    <h2>Discovered hosts</h2>
+    <p class="hint">Unicast sources that sent allowlisted multicast discovery/control. <strong>Group</strong> is <code>allowlist/name</code> from YAML (hover a cell for address/port/notes).</p>
+    <div id="hosts"></div>
+  </section>
+  <section>
+    <h2>Multicast groups (Control / Dante)</h2>
+    <p class="hint">IGMP joins from allowlists on the production VLAN interfaces. <strong>Pkts seen</strong> increments when that group is reflected.</p>
+    <div id="mcast"></div>
+  </section>
+  <section><h2>DHCP leases (Mgmt)</h2><div id="leases"></div></section>
+  <section><h2>Allowlists</h2><p class="hint">Configured reflection policy. Empty VuNET/Lake lists need on-site capture.</p><div id="allow"></div></section>
+  <section><h2>Notes</h2><ul class="notes" id="notes"></ul></section>
+</main>
+<script src="/static/app.js" defer></script>
+</body>
+</html>

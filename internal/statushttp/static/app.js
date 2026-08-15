@@ -16,18 +16,32 @@ function row(table, k, v, tip) {
   tr.appendChild(el('td', v));
   table.appendChild(tr);
 }
+function formatGroupEndpoints(g) {
+  const addrs = (g.addresses && g.addresses.length)
+    ? g.addresses.slice()
+    : (g.address ? [g.address] : []);
+  let ports = '';
+  if (g.ports && g.ports.length) {
+    ports = g.ports.join(',');
+  } else if (g.port) {
+    ports = String(g.port);
+    if (g.port_end && g.port_end > g.port) ports += '-' + g.port_end;
+  }
+  if (!addrs.length) return ports ? (':' + ports) : '';
+  const addrPart = addrs.length === 1 ? addrs[0] : addrs.join(',');
+  return ports ? (addrPart + ':' + ports) : addrPart;
+}
 function groupCatalog(d) {
   const map = {};
   (d.allowlists || []).forEach(a => {
     (a.groups || []).forEach(g => {
       if (typeof g === 'string') return;
       const key = g.key || ((a.name || '') + '/' + (g.name || ''));
-      let ports = String(g.port || '');
-      if (g.port_end && g.port_end > g.port) ports += '-' + g.port_end;
+      const ep = formatGroupEndpoints(g);
       const parts = [
         'Allowlist group ' + key,
         'VLAN: ' + (a.vlan || ''),
-        g.address ? ('Address: ' + g.address + (ports ? ':' + ports : '')) : '',
+        ep ? ('Address: ' + ep) : '',
         g.notes || ''
       ].filter(Boolean);
       map[key] = parts.join(' · ');
@@ -236,9 +250,8 @@ async function refresh() {
         if (typeof g === 'string') {
           sub.textContent = g;
         } else {
-          let ports = String(g.port || '');
-          if (g.port_end && g.port_end > g.port) ports += '-' + g.port_end;
-          sub.textContent = (g.key || g.name) + '  ' + (g.address || '') + (ports ? ':' + ports : '');
+          const ep = formatGroupEndpoints(g);
+          sub.textContent = (g.key || g.name) + (ep ? ('  ' + ep) : '');
           sub.title = tips[g.key] || (g.notes || '');
         }
         div.appendChild(sub);

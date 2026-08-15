@@ -44,12 +44,14 @@ type allowlistSummary struct {
 }
 
 type allowlistGroupSummary struct {
-	Key     string `json:"key"` // allowlist/group — same string as hosts.last_group
-	Name    string `json:"name"`
-	Address string `json:"address"`
-	Port    int    `json:"port"`
-	PortEnd int    `json:"port_end,omitempty"`
-	Notes   string `json:"notes,omitempty"`
+	Key       string   `json:"key"` // allowlist/group — same string as hosts.last_group
+	Name      string   `json:"name"`
+	Address   string   `json:"address,omitempty"`
+	Addresses []string `json:"addresses,omitempty"`
+	Port      int      `json:"port,omitempty"`
+	PortEnd   int      `json:"port_end,omitempty"`
+	Ports     []int    `json:"ports,omitempty"`
+	Notes     string   `json:"notes,omitempty"`
 }
 
 func (s *Server) Snapshot() payload {
@@ -80,14 +82,7 @@ func (s *Server) Snapshot() payload {
 	for _, al := range site.Allowlists {
 		sum := allowlistSummary{Name: al.Name, VLAN: al.VLAN}
 		for _, g := range al.Groups {
-			sum.Groups = append(sum.Groups, allowlistGroupSummary{
-				Key:     al.Name + "/" + g.Name,
-				Name:    g.Name,
-				Address: g.Address,
-				Port:    g.Port,
-				PortEnd: g.PortEnd,
-				Notes:   g.Notes,
-			})
+			sum.Groups = append(sum.Groups, summarizeAllowGroup(al.Name, g))
 		}
 		als = append(als, sum)
 	}
@@ -114,6 +109,30 @@ func (s *Server) Snapshot() payload {
 		Allowlists: als,
 		Notes:      notes,
 	}
+}
+
+func summarizeAllowGroup(allowlist string, g config.AllowGroup) allowlistGroupSummary {
+	out := allowlistGroupSummary{
+		Key:   allowlist + "/" + g.Name,
+		Name:  g.Name,
+		Notes: g.Notes,
+	}
+	addrs := g.ResolvedAddresses()
+	ports := g.ResolvedPorts()
+	if len(g.Addresses) > 0 {
+		out.Addresses = addrs
+	} else if len(addrs) == 1 {
+		out.Address = addrs[0]
+	}
+	if len(g.Ports) > 0 {
+		out.Ports = ports
+	} else if g.Port != 0 {
+		out.Port = g.Port
+		if g.PortEnd > g.Port {
+			out.PortEnd = g.PortEnd
+		}
+	}
+	return out
 }
 
 func (s *Server) Handler() http.Handler {

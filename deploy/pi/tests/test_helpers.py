@@ -29,18 +29,20 @@ def test_iface_invalid_name(nft_mod: Any) -> None:
         nft_mod.iface({"id": 1, "interface_name": "bad name"}, "eth0")
 
 
-def test_merge_deny_prefixes_includes_floor(nft_mod: Any) -> None:
-    out = nft_mod.merge_deny_prefixes({})
-    for p in nft_mod.FLOOR_DENY_PREFIXES:
-        assert nft_mod.normalize_prefix(p) in out
+def test_deny_prefixes_from_site_required(nft_mod: Any) -> None:
+    with pytest.raises(SystemExit, match="deny_multicast_prefixes required"):
+        nft_mod.deny_prefixes_from_site({})
 
 
-def test_merge_deny_prefixes_dedupes(nft_mod: Any) -> None:
-    site = {"deny_multicast_prefixes": ["224.0.1.128/30", "239.255.0.0/16"]}
-    out = nft_mod.merge_deny_prefixes(site)
-    assert len(out) == len(set(out))
-    assert out.count("224.0.1.128/30") == 1
+def test_deny_prefixes_from_site_dedupes(nft_mod: Any) -> None:
+    site = {"deny_multicast_prefixes": ["224.0.1.128/30", "224.0.1.128/30", "239.255.0.0/16"]}
+    out = nft_mod.deny_prefixes_from_site(site)
+    assert out == ["224.0.1.128/30", "239.255.0.0/16"]
 
+
+def test_deny_prefixes_rejects_unicast(nft_mod: Any) -> None:
+    with pytest.raises(SystemExit, match="multicast"):
+        nft_mod.deny_prefixes_from_site({"deny_multicast_prefixes": ["10.0.0.0/8"]})
 
 def test_role_iface_tagged(net_mod: Any) -> None:
     assert net_mod.role_iface("control", {"id": 200}, "eth0") == "eth0.200"

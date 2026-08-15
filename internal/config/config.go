@@ -10,16 +10,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// FloorDenyPrefixes are always denied for reflection and should match nftables floor.
-// 224.0.1.128/30 covers .128-.131; .132 is explicit so the full PTP set 129-132 is covered.
-var FloorDenyPrefixes = []string{
-	"224.0.1.128/30",
-	"224.0.1.132/32",
-	"239.255.0.0/16",
-	"239.69.0.0/16",
-	"239.254.3.3/32",
-}
-
 type Site struct {
 	Hostname          string   `yaml:"hostname"`
 	PhysicalInterface string   `yaml:"physical_interface"`
@@ -96,13 +86,21 @@ type Allowlist struct {
 }
 
 type AllowGroup struct {
-	Name      string `yaml:"name"`
-	Address   string `yaml:"address"`
-	Port      int    `yaml:"port"`
-	PortEnd   int    `yaml:"port_end"`
-	Proto     string `yaml:"proto"`
-	Direction string `yaml:"direction"` // both|to-mgmt|from-mgmt
-	Notes     string `yaml:"notes"`
+	Name      string   `yaml:"name"`
+	Address   string   `yaml:"address"`
+	Addresses []string `yaml:"addresses"`
+	Port      int      `yaml:"port"`
+	PortEnd   int      `yaml:"port_end"`
+	Ports     []int    `yaml:"ports"`
+	Proto     string   `yaml:"proto"`
+	Direction string   `yaml:"direction"` // both|to-mgmt|from-mgmt
+	Notes     string   `yaml:"notes"`
+}
+
+// Endpoint is one (address, port) membership after expanding a group.
+type Endpoint struct {
+	Address string
+	Port    int
 }
 
 func (g AllowGroup) PortMax() int {
@@ -110,6 +108,46 @@ func (g AllowGroup) PortMax() int {
 		return g.PortEnd
 	}
 	return g.Port
+}
+
+// ResolvedAddresses returns the group's address list (plural or singular form).
+func (g AllowGroup) ResolvedAddresses() []string {
+	if len(g.Addresses) > 0 {
+		return append([]string(nil), g.Addresses...)
+	}
+	if g.Address != "" {
+		return []string{g.Address}
+	}
+	return nil
+}
+
+// ResolvedPorts returns the group's port list (ports, or port…port_end).
+func (g AllowGroup) ResolvedPorts() []int {
+	if len(g.Ports) > 0 {
+		return append([]int(nil), g.Ports...)
+	}
+	if g.Port < 1 {
+		return nil
+	}
+	max := g.PortMax()
+	out := make([]int, 0, max-g.Port+1)
+	for p := g.Port; p <= max; p++ {
+		out = append(out, p)
+	}
+	return out
+}
+
+// Endpoints returns the cartesian product of resolved addresses × ports.
+func (g AllowGroup) Endpoints() []Endpoint {
+	addrs := g.ResolvedAddresses()
+	ports := g.ResolvedPorts()
+	out := make([]Endpoint, 0, len(addrs)*len(ports))
+	for _, a := range addrs {
+		for _, p := range ports {
+			out = append(out, Endpoint{Address: a, Port: p})
+		}
+	}
+	return out
 }
 
 func LoadSite(path string) (*Site, error) {
@@ -128,7 +166,11 @@ func LoadSite(path string) (*Site, error) {
 	if s.Hostname == "" {
 		s.Hostname = "combiner"
 	}
-	s.DenyPrefixes = mergeDenyPrefixes(s.DenyPrefixes)
+	normalized, err := normalizeDenyPrefixes(s.DenyPrefixes)
+	if err != nil {
+		return nil, err
+	}
+	s.DenyPrefixes = normalized
 	if err := s.validate(); err != nil {
 		return nil, err
 	}
@@ -146,35 +188,40 @@ func LoadSite(path string) (*Site, error) {
 	return &s, nil
 }
 
-func mergeDenyPrefixes(extra []string) []string {
+// normalizeDenyPrefixes dedupes and canonicalizes site.yaml deny_multicast_prefixes.
+// That list is the sole source of truth for reflector and nftables deny rules.
+func normalizeDenyPrefixes(raw []string) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("deny_multicast_prefixes required (non-empty)")
+	}
 	seen := map[string]struct{}{}
 	var out []string
-	add := func(p string) {
+	for _, p := range raw {
 		_, n, err := net.ParseCIDR(p)
 		if err != nil {
 			ip := net.ParseIP(p)
-			if ip == nil {
-				return
+			if ip == nil || ip.To4() == nil {
+				return nil, fmt.Errorf("deny_multicast_prefixes: bad prefix %q", p)
 			}
 			_, n, err = net.ParseCIDR(ip.String() + "/32")
 			if err != nil {
-				return
+				return nil, fmt.Errorf("deny_multicast_prefixes: bad prefix %q", p)
 			}
+		}
+		if n.IP.To4() == nil {
+			return nil, fmt.Errorf("deny_multicast_prefixes: not IPv4 %q", p)
+		}
+		if !n.IP.IsMulticast() {
+			return nil, fmt.Errorf("deny_multicast_prefixes: not multicast %q", p)
 		}
 		key := n.String()
 		if _, ok := seen[key]; ok {
-			return
+			continue
 		}
 		seen[key] = struct{}{}
 		out = append(out, key)
 	}
-	for _, p := range FloorDenyPrefixes {
-		add(p)
-	}
-	for _, p := range extra {
-		add(p)
-	}
-	return out
+	return out, nil
 }
 
 func loadAllowlist(path string) (*Allowlist, error) {
@@ -204,24 +251,68 @@ func loadAllowlist(path string) (*Allowlist, error) {
 		default:
 			return nil, fmt.Errorf("group %s: bad direction %q", g.Name, g.Direction)
 		}
-		ip := net.ParseIP(g.Address)
-		if ip == nil || ip.To4() == nil {
-			return nil, fmt.Errorf("group %s: bad address %q", g.Name, g.Address)
-		}
-		if !ip.IsMulticast() {
-			return nil, fmt.Errorf("group %s: address %q is not multicast", g.Name, g.Address)
-		}
 		if !strings.EqualFold(g.Proto, "udp") {
 			return nil, fmt.Errorf("group %s: only udp supported", g.Name)
 		}
-		if g.Port < 1 || g.Port > 65535 {
-			return nil, fmt.Errorf("group %s: bad port %d", g.Name, g.Port)
+		if err := validateAllowGroupAddresses(g); err != nil {
+			return nil, err
 		}
-		if g.PortEnd != 0 && (g.PortEnd < g.Port || g.PortEnd > 65535) {
-			return nil, fmt.Errorf("group %s: bad port_end %d", g.Name, g.PortEnd)
+		if err := validateAllowGroupPorts(g); err != nil {
+			return nil, err
 		}
 	}
 	return &al, nil
+}
+
+func validateAllowGroupAddresses(g *AllowGroup) error {
+	hasSingular := g.Address != ""
+	hasPlural := len(g.Addresses) > 0
+	switch {
+	case hasSingular && hasPlural:
+		return fmt.Errorf("group %s: set address or addresses, not both", g.Name)
+	case !hasSingular && !hasPlural:
+		return fmt.Errorf("group %s: address or addresses required", g.Name)
+	}
+	for _, addr := range g.ResolvedAddresses() {
+		ip := net.ParseIP(addr)
+		if ip == nil || ip.To4() == nil {
+			return fmt.Errorf("group %s: bad address %q", g.Name, addr)
+		}
+		if !ip.IsMulticast() {
+			return fmt.Errorf("group %s: address %q is not multicast", g.Name, addr)
+		}
+	}
+	return nil
+}
+
+func validateAllowGroupPorts(g *AllowGroup) error {
+	hasPorts := len(g.Ports) > 0
+	hasPort := g.Port != 0
+	hasPortEnd := g.PortEnd != 0
+	if hasPorts && (hasPort || hasPortEnd) {
+		return fmt.Errorf("group %s: set ports or port/port_end, not both", g.Name)
+	}
+	if hasPorts {
+		for _, p := range g.Ports {
+			if p < 1 || p > 65535 {
+				return fmt.Errorf("group %s: bad port %d", g.Name, p)
+			}
+		}
+		return nil
+	}
+	if hasPortEnd && !hasPort {
+		return fmt.Errorf("group %s: port required when port_end is set", g.Name)
+	}
+	if !hasPort {
+		return fmt.Errorf("group %s: port or ports required", g.Name)
+	}
+	if g.Port < 1 || g.Port > 65535 {
+		return fmt.Errorf("group %s: bad port %d", g.Name, g.Port)
+	}
+	if hasPortEnd && (g.PortEnd < g.Port || g.PortEnd > 65535) {
+		return fmt.Errorf("group %s: bad port_end %d", g.Name, g.PortEnd)
+	}
+	return nil
 }
 
 func (s *Site) validate() error {
@@ -347,7 +438,7 @@ func (s *Site) MgmtIface() string {
 	return s.VLANs.Mgmt.Iface(s.PhysicalInterface)
 }
 
-// Denied reports whether ip falls in the compiled deny floor (+ site extras).
+// Denied reports whether ip falls in site deny_multicast_prefixes.
 func (s *Site) Denied(ip net.IP) bool {
 	if ip == nil {
 		return true

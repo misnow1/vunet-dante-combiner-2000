@@ -51,8 +51,8 @@ allowlist_files:
   - allowlists/vunet.yaml
   - allowlists/lake.yaml
 
-# Hard-deny prefixes (never reflect). Floor prefixes are always applied in code/nft
-# even if omitted here; listed for documentation.
+# Hard-deny prefixes (never reflect / never forward to Mgmt or Control).
+# Sole source of truth — also consumed by generate-nftables.py.
 deny_multicast_prefixes:
   - 224.0.1.128/30          # PTP 224.0.1.128-131
   - 224.0.1.132/32          # PTP 224.0.1.132

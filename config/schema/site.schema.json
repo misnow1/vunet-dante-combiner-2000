@@ -4,7 +4,7 @@
   "title": "CombinerSiteConfig",
   "description": "JSON Schema for site.yaml. Validate with any draft-2020-12 tool, or rely on the combiner Go loader which enforces the same fields.",
   "type": "object",
-  "required": ["hostname", "physical_interface", "vlans", "mgmt_dhcp", "allowlist_files"],
+  "required": ["hostname", "physical_interface", "vlans", "mgmt_dhcp", "allowlist_files", "deny_multicast_prefixes"],
   "additionalProperties": false,
   "properties": {
     "hostname": { "type": "string", "minLength": 1 },
@@ -50,7 +50,9 @@
     },
     "deny_multicast_prefixes": {
       "type": "array",
-      "items": { "type": "string" }
+      "items": { "type": "string" },
+      "minItems": 1,
+      "description": "Sole source of truth for multicast denies (reflector + nftables). Must be IPv4 multicast CIDRs."
     },
     "dante_unicast_udp_ports": {
       "type": "array",

@@ -76,9 +76,11 @@ func New(site *config.Site, inv *inventory.Store) (*Service, error) {
 	// Refuse allowlist entries that intersect the deny floor
 	for _, al := range site.Allowlists {
 		for _, g := range al.Groups {
-			ip := net.ParseIP(g.Address)
-			if s.denied(ip) {
-				return nil, fmt.Errorf("allowlist %s/%s address %s is on deny floor", al.Name, g.Name, g.Address)
+			for _, addr := range g.ResolvedAddresses() {
+				ip := net.ParseIP(addr)
+				if s.denied(ip) {
+					return nil, fmt.Errorf("allowlist %s/%s address %s is on deny floor", al.Name, g.Name, addr)
+				}
 			}
 		}
 	}
@@ -117,7 +119,9 @@ func (s *Service) setPacket(msg string) {
 func (s *Service) groupCount() int {
 	n := 0
 	for _, al := range s.site.Allowlists {
-		n += len(al.Groups)
+		for _, g := range al.Groups {
+			n += len(g.Endpoints())
+		}
 	}
 	return n
 }
@@ -158,19 +162,19 @@ func (s *Service) Run(ctx context.Context) error {
 			return fmt.Errorf("allowlist %s peer iface equals mgmt", al.Name)
 		}
 		for _, g := range al.Groups {
-			ip := net.ParseIP(g.Address).To4()
-			if ip == nil || s.denied(ip) {
-				log.Printf("skip group %s (%s)", g.Name, g.Address)
-				continue
-			}
-			for port := g.Port; port <= g.PortMax(); port++ {
-				key := fmt.Sprintf("%s|%d|%s", ip, port, peer)
+			for _, ep := range g.Endpoints() {
+				ip := net.ParseIP(ep.Address).To4()
+				if ip == nil || s.denied(ip) {
+					log.Printf("skip group %s (%s)", g.Name, ep.Address)
+					continue
+				}
+				key := fmt.Sprintf("%s|%d|%s", ip, ep.Port, peer)
 				if _, ok := seen[key]; ok {
-					log.Printf("dedupe membership %s udp/%d on %s", ip, port, peer)
+					log.Printf("dedupe membership %s udp/%d on %s", ip, ep.Port, peer)
 					continue
 				}
 				seen[key] = struct{}{}
-				byPort[port] = append(byPort[port], membership{
+				byPort[ep.Port] = append(byPort[ep.Port], membership{
 					groupIP:   append(net.IP(nil), ip...),
 					name:      g.Name,
 					allowlist: al.Name,
@@ -182,7 +186,7 @@ func (s *Service) Run(ctx context.Context) error {
 					Allowlist: al.Name,
 					Name:      g.Name,
 					Address:   ip.String(),
-					Port:      port,
+					Port:      ep.Port,
 					VLAN:      al.VLAN,
 					MgmtIface: mgmt,
 					PeerIface: peer,

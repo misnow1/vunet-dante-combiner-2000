@@ -11,31 +11,23 @@ groups:
     direction: both
     notes: mDNS / DNS-SD device discovery
 
-  - name: dante-ctrl-230
-    address: 224.0.0.230
+  - name: dante-control
+    addresses:
+      - 224.0.0.230
+      - 224.0.0.231
+      - 224.0.0.232
+      - 224.0.0.233
     port: 8700
     port_end: 8708
     proto: udp
     direction: both
     notes: Dante multicast control and monitoring
 
-  - name: dante-ctrl-231
-    address: 224.0.0.231
-    port: 8700
-    port_end: 8708
+  - name: dante-logging
+    addresses:
+      - 239.254.1.1
+      - 239.254.44.44
+    port: 9998
     proto: udp
     direction: both
-
-  - name: dante-ctrl-232
-    address: 224.0.0.232
-    port: 8700
-    port_end: 8708
-    proto: udp
-    direction: both
-
-  - name: dante-ctrl-233
-    address: 224.0.0.233
-    port: 8700
-    port_end: 8708
-    proto: udp
-    direction: both
+    notes: Dante logging

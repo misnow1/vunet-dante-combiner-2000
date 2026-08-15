@@ -131,7 +131,7 @@ PC (VuNET)
 Until a capture proves (1) or (2), treat VuNET discovery-through-reflector as **unverified**. See [`capture-playbook.md`](capture-playbook.md) § VuNET.
 ### 1d. What never reaches Merged or Martin Control
 
-PTP (`224.0.1.129–132` UDP 319/320), Dante ATP / AES67 media ranges, etc. are dropped toward Mgmt/Control in nftables and refused by the reflector deny floor. Audio multicast stays on Dante.
+PTP (`224.0.1.129–132` UDP 319/320), Dante ATP / AES67 media ranges, etc. are dropped toward Mgmt/Control in nftables and refused by the reflector using `deny_multicast_prefixes` from `site.yaml`. Audio multicast stays on Dante.
 
 ---
 

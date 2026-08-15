@@ -44,6 +44,7 @@ def test_deny_prefixes_rejects_unicast(nft_mod: Any) -> None:
     with pytest.raises(SystemExit, match="multicast"):
         nft_mod.deny_prefixes_from_site({"deny_multicast_prefixes": ["10.0.0.0/8"]})
 
+
 def test_role_iface_tagged(net_mod: Any) -> None:
     assert net_mod.role_iface("control", {"id": 200}, "eth0") == "eth0.200"
 

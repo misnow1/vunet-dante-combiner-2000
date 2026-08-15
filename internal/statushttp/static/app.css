@@ -1,0 +1,29 @@
+  :root { --bg:#0f1419; --fg:#e7ecf1; --muted:#9aa7b5; --ok:#3dd68c; --bad:#f31260; --card:#1a2332; --line:#2a3545; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: "IBM Plex Sans", "Segoe UI", sans-serif; background: var(--bg); color: var(--fg); }
+  header { padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--line); display:flex; justify-content:space-between; align-items:baseline; gap:1rem; flex-wrap:wrap; }
+  h1 { margin:0; font-size:1.25rem; letter-spacing:0.02em; }
+  .sub { color: var(--muted); font-size:0.9rem; }
+  main { padding: 1.25rem 1.5rem 3rem; display:grid; gap:1rem; }
+  .grid { display:grid; gap:1rem; grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); }
+  section { background: var(--card); border:1px solid var(--line); border-radius: 10px; padding:1rem; }
+  h2 { margin:0 0 0.35rem; font-size:0.95rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); }
+  .hint { color: var(--muted); font-size:0.8rem; margin:0 0 0.75rem; line-height:1.35; }
+  table { width:100%; border-collapse: collapse; font-size:0.9rem; }
+  th, td { text-align:left; padding:0.4rem 0.35rem; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; }
+  th[title], td[title], .tip { cursor: help; border-bottom: 1px dotted var(--muted); }
+  .pill { display:inline-block; padding:0.1rem 0.45rem; border-radius:999px; font-size:0.75rem; }
+  .up { background:#143528; color:var(--ok); }
+  .down { background:#3a1520; color:var(--bad); }
+  .metric { font-variant-numeric: tabular-nums; }
+  .notes li { margin:0.35rem 0; color:var(--muted); }
+  code { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size:0.85em; }
+  .hdr-controls { display:flex; align-items:center; gap:0.85rem; flex-wrap:wrap; color:var(--muted); font-size:0.9rem; }
+  .hdr-controls label { display:inline-flex; align-items:center; gap:0.35rem; cursor:pointer; user-select:none; }
+  .hdr-controls button {
+    background: transparent; color: var(--fg); border:1px solid var(--line); border-radius:6px;
+    padding:0.25rem 0.6rem; font: inherit; cursor:pointer;
+  }
+  .hdr-controls button:hover { border-color: #7ab7ff; }
+  .hdr-controls a { color:#7ab7ff; }

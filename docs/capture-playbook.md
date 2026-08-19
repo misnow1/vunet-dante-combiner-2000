@@ -1,17 +1,22 @@
 # Capture playbook
 
-Use a dual-NIC (or dual-homed) laptop on the production network to learn exact multicast groups and ports for **VuNET** and **Lake**, and to confirm Dante matches the seeded allowlist.
+Use a dual-NIC (or dual-homed) laptop on the production network to confirm Dante and Shure allowlists, fill **Lake** groups, and optionally document VuNET. Clients already share Control with VuNET / Yamaha / MixPad — those protocols are **not** reflector inputs.
+
+Background: [`protocols.md`](protocols.md). Allow/deny: [`traffic-matrix.md`](traffic-matrix.md).
 
 ## Goals
 
-1. Produce allowlist entries for `config/allowlists/vunet.yaml` and `config/allowlists/lake.yaml`
-2. Confirm Dante groups in `config/allowlists/dante.yaml`
-3. Never leave a capture NIC bridging Control and Dante
+1. Confirm Dante groups in `config/allowlists/dante.yaml`
+2. Confirm Shure Discovery `239.255.254.253:8427` (and that PTP is absent from allowlists)
+3. Produce allowlist entries for `config/allowlists/lake.yaml`
+4. Optional: document VuNET talkers for operators (do **not** load them into the reflector)
+5. Never leave a capture NIC bridging Control, Dante, or SoundGrid
 
 ## Safety
 
 - Capture **one VLAN at a time** when possible
 - Do not enable IP forwarding on the capture laptop between Control and Dante
+- **Do not** span or sit on a SoundGrid switch for “completeness” — that fabric carries SoE clock and audio
 - Prefer a span/mirror port or a filtered access port over sitting in the middle of amp control during a show
 
 ## Tools
@@ -39,71 +44,36 @@ tshark -r dante-discovery.pcap -T fields -e ip.dst -e udp.dstport \
   | sort | uniq -c | sort -nr | head -50
 ```
 
-Expect to see `224.0.0.251:5353` and `224.0.0.230`–`233` with ports in `8700`–`8708`. PTP (`224.0.1.129`–`132`) should **not** be added to the allowlist.
+Expect `224.0.0.251:5353` and `224.0.0.230`–`233` with ports in `8700`–`8708`. PTP (`224.0.1.129`–`132`) must **not** be added to any allowlist.
 
-## VuNET (Martin Control VLAN)
+## Shure Wireless Workbench (Dante VLAN)
 
-1. Connect one NIC to Control only
-2. Start capture, then launch VuNET and wait until amps appear
-3. Perform a typical control action (select amp, change a non-destructive parameter if safe)
+Same NIC as Dante. With WWB open and receivers online:
+
+```bash
+sudo tcpdump -ni eth0 -w shure-wwb.pcap \
+  'udp port 8427 or (udp port 5353 and multicast)'
+```
+
+Expect `239.255.254.253` UDP **8427**. mDNS `224.0.0.251:5353` is already covered by the Dante allowlist. If you see SSDP `239.255.255.250:1900` and WWB still discovers without it, leave SSDP off the allowlist.
+
+Unicast after discovery is typically UDP **5568** (and sometimes **2200–2201**); those use SNAT, not the reflector.
+
+## VuNET (Martin Control VLAN) — documentation only
+
+VuNET is native L2 on Control. Capture only if you want a record of groups/ports; **do not** add them to combiner allowlists (`vlan` must be `dante`).
+
+1. Connect one NIC to Control only (same VLAN as the WAP/clients)
+2. Launch VuNET, wait until amps appear, perform a safe control action
 
 ```bash
 sudo tcpdump -ni eth1 -w vunet-discovery.pcap 'multicast or broadcast'
 ```
 
-Extract candidates:
-
 ```bash
 tshark -r vunet-discovery.pcap -T fields -e ip.src -e ip.dst -e udp.dstport -e tcp.dstport \
   | sort | uniq -c | sort -nr
 ```
-
-### Critical: how does VuNET pick the unicast target?
-
-Martin discovery multicasts are believed to **embed the device IP in the payload**. Confirm whether VuNET’s later unicast uses that embedded address or the **outer IP source** of the discovery packet.
-
-**In the same capture (or a follow-up with VuNET actively controlling an amp):**
-
-1. Find a discovery multicast from an amp (e.g. src `10.200.1.35` → some mcast dst).
-2. Inspect the payload (Wireshark hex / “Follow UDP stream”) for `10.200.1.35` (and siblings).
-3. Find the first **unicast** from the VuNET host to that amp after discovery.
-4. Compare:
-   - If unicast dest == **embedded payload IP** → reflector src rewrite is OK for VuNET.
-   - If unicast dest tracks **discovery packet src IP** → reflecting with combiner src (`10.209.0.1`) will mis-direct VuNET; do not ship VuNET-via-combiner until we change strategy (source-preserving reflect or protocol-aware proxy).
-
-Quick correlators:
-
-```bash
-# Multicast talkers (candidate discovery)
-tshark -r vunet-discovery.pcap -Y 'ip.dst >= 224.0.0.0' -T fields \
-  -e frame.time_relative -e ip.src -e ip.dst -e udp.srcport -e udp.dstport -e data
-
-# Unicast from the VuNET PC after amps appear (set PC_IP)
-tshark -r vunet-discovery.pcap -Y "ip.src == ${PC_IP} && !(ip.dst >= 224.0.0.0 and ip.dst <= 239.255.255.255)" -T fields \
-  -e frame.time_relative -e ip.src -e ip.dst -e udp.dstport -e tcp.dstport
-```
-
-Add clear discovery groups to `config/allowlists/vunet.yaml` only after groups **and** the unicast-target rule above are known:
-
-```yaml
-groups:
-  - name: vunet-discovery-example
-    address: 239.x.x.x
-    port: 1234
-    proto: udp
-    direction: both   # mgmt<->control
-    notes: captured YYYY-MM-DD; VuNET unicast uses payload|source IP (pick one)
-
-  # Multiple addresses/ports expand to a cartesian product:
-  # - name: example-multi
-  #   addresses: [239.1.1.1, 239.1.1.2]
-  #   port: 1000
-  #   port_end: 1002
-  # Or list ports explicitly (mutually exclusive with port/port_end):
-  #   ports: [1000, 1001, 1002]
-```
-
-Also note unicast ports used after discovery (for optional nftables tightening later).
 
 ## Lake Controller (Dante VLAN)
 
@@ -114,28 +84,34 @@ Also note unicast ports used after discovery (for optional nftables tightening l
 sudo tcpdump -ni eth0 -w lake-discovery.pcap 'multicast or broadcast'
 ```
 
-Same `tshark` summary as above. Lake may use broadcast and/or multicast; record both. Prefer allowing specific groups over reflecting all broadcast.
+Lake may use broadcast and/or multicast; record both. Prefer specific multicast groups over reflecting all broadcast. Update `config/allowlists/lake.yaml` (`vlan: dante`).
 
-Update `config/allowlists/lake.yaml`.
+## Yamaha / Allen & Heath / DiGiCo
+
+No combiner allowlist. Confirm on Control that StageMix/Editor and MixPad discover without the combiner (they should). MixPad uses UDP **broadcast**; if it fails, the WAP or switch is filtering broadcasts — not a reflector bug.
+
+DiGiCo **with Waves SoundGrid**: capture on the SG switch is out of scope. Do not merge that VLAN onto Control.
 
 ## Feeding the combiner
 
-After editing allowlists:
+After editing Dante/Shure/Lake allowlists:
 
 ```bash
-# On the combiner, reload config (service watches file or restart)
 sudo systemctl restart combiner
 sudo combiner-status
 ```
 
-Watch the status page inventory populate as discovery traffic flows.
+Watch the status page inventory populate as **Dante-side** discovery is reflected onto Control.
 
 ## What “done” looks like
 
-| App | On Mgmt via combiner |
+| App | On Control |
 | --- | --- |
-| Dante Controller | Devices listed; can subscribe/configure; Clock Status OK |
-| VuNET | Amps listed; can control |
-| Lake Controller | Frames listed; can control |
+| VuNET | Native — amps listed; can control (no reflector) |
+| Yamaha StageMix / Editor | Native — console listed or IP entered |
+| A&H MixPad | Native — mixer found via broadcast |
+| Dante Controller | Devices listed via reflector; Clock Status OK (PTP stays on Dante) |
+| Wireless Workbench | Receivers listed; unicast control works (SNAT) |
+| Lake Controller | Frames listed after Lake groups are allowlisted; can control |
 
-If discovery works but unicast control fails, check SNAT counters and that the combiner has the correct static IP on that VLAN.
+If Dante/WWB/Lake discovery works but unicast control fails, check `snat_to_dante` and that the combiner has the correct static IP on Dante. Control clients must use the **combiner Control IP as default gateway** ([`setup.md`](setup.md)) so Dante destinations are routed through SNAT — not a switch SVI.

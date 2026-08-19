@@ -39,7 +39,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get install -y nftables python3-yaml iproute2 conntrack
 
-DHCP_ENABLED="$(python3 -c 'import yaml,sys; d=yaml.safe_load(open(sys.argv[1])).get("mgmt_dhcp") or {}; print("1" if d.get("enabled", True) else "0")' "$SITE_YAML")"
+DHCP_ENABLED="$(python3 -c 'import yaml,sys; d=yaml.safe_load(open(sys.argv[1])).get("mgmt_dhcp") or {}; print("1" if d.get("enabled", False) else "0")' "$SITE_YAML")"
 if [[ "$DHCP_ENABLED" == "1" ]]; then
   apt-get install -y dnsmasq
 fi
@@ -105,7 +105,7 @@ python3 "$ROOT/deploy/pi/generate-network-config.py" "$SITE_YAML" "$STAGING"
 # networkd only hands DNS= to systemd-resolved, so install it just for the lab
 # uplink case. Installing it rewrites /etc/resolv.conf as a symlink to its stub,
 # which leaves the box with no DNS at all if resolved is not actually running.
-MGMT_DNS_COUNT="$(python3 -c 'import yaml,sys; print(len((yaml.safe_load(open(sys.argv[1]))["vlans"]["mgmt"].get("dns") or [])))' "$SITE_YAML")"
+MGMT_DNS_COUNT="$(python3 -c 'import yaml,sys; v=yaml.safe_load(open(sys.argv[1])).get("vlans") or {}; m=v.get("mgmt") or {}; print(len(m.get("dns") or []))' "$SITE_YAML")"
 if [[ "$MGMT_DNS_COUNT" -gt 0 ]]; then
   apt-get install -y systemd-resolved || true
 fi
@@ -191,7 +191,7 @@ if [[ -n "$MISSING" ]]; then
   exit 1
 fi
 
-# Mgmt DHCP: enable dnsmasq only when site.yaml mgmt_dhcp.enabled is true (default).
+# Mgmt DHCP: enable dnsmasq only when site.yaml mgmt_dhcp.enabled is true.
 if [[ "$(cat "$STAGING/combiner-mgmt-dhcp.enabled")" == "1" ]]; then
   mkdir -p /etc/dnsmasq.d
   if [[ -f /etc/dnsmasq.conf ]]; then
@@ -203,7 +203,7 @@ if [[ "$(cat "$STAGING/combiner-mgmt-dhcp.enabled")" == "1" ]]; then
 else
   rm -f /etc/dnsmasq.d/combiner-mgmt.conf
   systemctl disable --now dnsmasq 2>/dev/null || true
-  echo "mgmt_dhcp.enabled=false — dnsmasq not started (existing Mgmt DHCP left alone)"
+  echo "mgmt_dhcp.enabled=false — dnsmasq not started"
 fi
 
 # Enable forwarding ONLY after rules are live
@@ -236,7 +236,7 @@ fi
 
 echo "Install complete. Run: combiner-status"
 if [[ "$DHCP_ENABLED" == "1" ]]; then
-  echo "Status: http://<mgmt-ip>:8080/  (no DNS on Mgmt by design; use IP)"
+  echo "Status: http://<control-ip>:8080/  (clients on Control; use combiner Control IP)"
 else
-  echo "Status: http://<mgmt-ip>:8080/  (Mgmt DHCP disabled; use a static/existing address)"
+  echo "Status: http://<control-ip-or-mgmt-ip>:8080/"
 fi

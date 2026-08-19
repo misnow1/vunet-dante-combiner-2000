@@ -92,11 +92,10 @@ async function refresh() {
   const nftTable = el('table');
   nftTable.className = 'metric';
   const n = d.nft || {};
-  row(nftTable, 'drop_ptp', n.drop_ptp, 'PTP (224.0.1.129-132 udp/319-320) dropped toward Mgmt/Control — expected non-zero when Dante is live.');
+  row(nftTable, 'drop_ptp', n.drop_ptp, 'PTP (224.0.1.129-132 udp/319-320) dropped toward Control — expected non-zero when Dante is live.');
   row(nftTable, 'drop_deny_mcast', n.drop_deny_mcast, 'Hard-denied multicast prefixes (media/PTP floor).');
   row(nftTable, 'drop_forward_mcast', n.drop_forward_mcast, 'Any multicast the kernel tried to forward — should only rise if something bypasses the reflector path.');
-  row(nftTable, 'drop_control_dante', n.drop_control_dante, 'Packets trying to hairpin Control↔Dante through the combiner.');
-  row(nftTable, 'snat_to_control', n.snat_to_control, 'Unicast sessions SNATed so Control devices see the combiner address.');
+  if (n.snat_to_control) row(nftTable, 'snat_to_control', n.snat_to_control, 'Lab Mgmt unicast SNATed so Control devices see the combiner address.');
   row(nftTable, 'snat_to_dante', n.snat_to_dante, 'Unicast sessions SNATed so Dante devices see the combiner address.');
   if (n.error) row(nftTable, 'error', n.error);
   nftWrap.appendChild(nftTable);
@@ -126,7 +125,7 @@ async function refresh() {
   } else {
     const table = el('table');
     const head = el('tr');
-    head.appendChild(th('VLAN', 'Interface role where the source was last heard (mgmt, control, or dante).'));
+    head.appendChild(th('VLAN', 'Interface role where the source was last heard (control or dante).'));
     head.appendChild(th('IP', 'Source IP of the discovery/control sender.'));
     head.appendChild(th('Group', 'allowlist/name from config YAML. Example: dante/mdns = Dante allowlist, mDNS group (224.0.0.251:5353). Hover a cell for details.'));
     head.appendChild(th('Pkts', 'Packets reflected from this source.'));
@@ -166,13 +165,13 @@ async function refresh() {
     observed[g.vlan + '|' + g.address + '|' + g.port] = g;
   });
   if (!memberships.length) {
-    const empty = el('div', 'No allowlisted groups joined yet (VuNET/Lake allowlists are empty until capture).');
+    const empty = el('div', 'No allowlisted groups joined yet (Lake allowlist is empty until capture).');
     empty.className = 'sub';
     mcastWrap.appendChild(empty);
   } else {
     const table = el('table');
     const head = el('tr');
-    head.appendChild(th('VLAN', 'Production VLAN for this allowlist (control or dante).'));
+    head.appendChild(th('VLAN', 'Allowlist VLAN (dante). Groups are joined on Control and Dante.'));
     head.appendChild(th('Group', 'allowlist/name from YAML. Hover for address, ports, and notes.'));
     head.appendChild(th('Address', 'Multicast destination IP.'));
     head.appendChild(th('Port', 'UDP port (or start of a port range).'));

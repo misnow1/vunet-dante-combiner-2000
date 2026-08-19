@@ -57,9 +57,11 @@ type allowlistGroupSummary struct {
 func (s *Server) Snapshot() payload {
 	site := s.Site
 	ifaces := []netinfo.IfaceStatus{
-		netinfo.Describe("mgmt", site.MgmtIface()),
 		netinfo.Describe("control", site.VLANs.Control.Iface(site.PhysicalInterface)),
 		netinfo.Describe("dante", site.VLANs.Dante.Iface(site.PhysicalInterface)),
+	}
+	if site.HasMgmt() {
+		ifaces = append([]netinfo.IfaceStatus{netinfo.Describe("mgmt", site.MgmtIface())}, ifaces...)
 	}
 	hosts := s.Inv.List()
 	sort.Slice(hosts, func(i, j int) bool {
@@ -88,11 +90,11 @@ func (s *Server) Snapshot() payload {
 	}
 	notes := []string{
 		"Non-zero drop_ptp / drop_deny_mcast / drop_forward_mcast while Dante is live are healthy.",
-		"Control↔Dante drops should stay ~0; if rising, something is trying to hairpin through the combiner.",
-		"Multicast never kernel-forwards; only the allowlisted reflector crosses VLANs.",
-		"Joined groups are from allowlists (IGMP joins on Mgmt + Control/Dante). Observed groups appear once reflected traffic is seen.",
-		"Mgmt has no DNS by design — open status via http://<mgmt-ip>:8080/",
-		"VuNET/Lake discovery requires on-site capture into allowlist YAML.",
+		"Clients live on Control. VuNET / StageMix / MixPad are native L2; Dante/Shure/Lake use the reflector + SNAT.",
+		"Multicast never kernel-forwards; only the allowlisted reflector crosses to Dante.",
+		"Joined groups are from allowlists (IGMP joins on Control + Dante). Observed groups appear once reflected traffic is seen.",
+		"Open status via http://<control-ip>:8080/ (optional lab Mgmt if configured).",
+		"Lake discovery requires on-site capture into allowlist YAML. Do not trunk SoundGrid.",
 	}
 	return payload{
 		Hostname:   site.Hostname,

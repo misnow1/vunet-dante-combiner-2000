@@ -25,7 +25,7 @@
   <div class="grid" id="ifaces"></div>
   <div class="grid">
     <section><h2>nftables counters</h2><p class="hint">Kernel drops and SNAT. Non-zero PTP/media drops on a live Dante network are healthy.</p><div id="nft"></div></section>
-    <section><h2>Reflector</h2><p class="hint">Userspace multicast reflector between Mgmt and Control/Dante. Kernel never forwards multicast.</p><div id="ref"></div></section>
+    <section><h2>Reflector</h2><p class="hint">Userspace multicast reflector between Control and Dante. Kernel never forwards multicast.</p><div id="ref"></div></section>
   </div>
   <section>
     <h2>Discovered hosts</h2>
@@ -37,8 +37,8 @@
     <p class="hint">IGMP joins from allowlists on the production VLAN interfaces. <strong>Pkts seen</strong> increments when that group is reflected.</p>
     <div id="mcast"></div>
   </section>
-  <section><h2>DHCP leases (Mgmt)</h2><div id="leases"></div></section>
-  <section><h2>Allowlists</h2><p class="hint">Configured reflection policy. Empty VuNET/Lake lists need on-site capture.</p><div id="allow"></div></section>
+  <section><h2>DHCP leases (optional Mgmt)</h2><div id="leases"></div></section>
+  <section><h2>Allowlists</h2><p class="hint">Configured reflection policy (Dante / Shure / Lake). Empty Lake lists need on-site capture.</p><div id="allow"></div></section>
   <section><h2>Notes</h2><ul class="notes" id="notes"></ul></section>
 </main>
 <script src="/static/app.js" defer></script>

@@ -1,14 +1,8 @@
-# VuNET / Martin Audio control multicast — FILL FROM CAPTURE
-# See docs/capture-playbook.md (Martin Control VLAN).
+# VuNET / Martin Audio — NOT loaded by the combiner.
+# Clients share the Control VLAN with the amps (native L2). Do not add
+# reflector groups here; allowlist vlan must be dante (see dante.yaml / shure.yaml).
+# Optional capture notes: docs/capture-playbook.md and docs/protocols.md.
 
 name: vunet
-vlan: control
+vlan: dante
 groups: []
-# Example after capture:
-# groups:
-#   - name: vunet-discovery
-#     address: 239.x.x.x
-#     port: 0
-#     proto: udp
-#     direction: both
-#     notes: captured YYYY-MM-DD

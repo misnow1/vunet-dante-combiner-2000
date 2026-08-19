@@ -1,87 +1,61 @@
 # Architecture
 
+Why the combiner exists and what it is allowed to do. **Cabling, addresses, DHCP, and Pi install:** [`setup.md`](setup.md). Hop-by-hop packets: [`packet-flow.md`](packet-flow.md).
+
 ## Problem
 
-Martin Audio best practice keeps amp **control** off the **Dante** network because Dante PTP (and related multicast) can overwhelm the amp control stack and cause reboots. That forces a control computer to sit in both VLANs — two NICs, or VLAN tagging Windows Home lacks — and blocks a simple wireless-only workflow.
-
-Martin amps (Linea Research) do not expose a usable default route under static VuNET addressing. Dante device gateway fields may be empty or wrong. Discovery for VuNET, Dante Controller, and Lake Controller is multicast-based.
+Martin Audio best practice keeps amp **control** off Dante **PTP and multicast audio** — that traffic can overwhelm the amp control stack. The same FOH/monitor computer also runs VuNET, Yamaha or A&H mixer apps, Dante Controller, Lake, and often Shure WWB. Mixer-control and MixPad want **same-subnet** (including UDP broadcast). Dante/WWB/Lake live on the Dante VLAN. Dual-NIC or client VLAN tagging is what we are trying not to require.
 
 ## Solution
 
-A small Linux **combiner** on an 802.1Q trunk:
+Clients and the WAP live on **Martin Control** with the amps. The combiner is a Linux box with an IP on Control and on Dante. It:
 
-1. Creates a third **Mgmt** VLAN for control clients (laptop/tablet via a separate WAP or wired port).
-2. Holds an IP on Mgmt, Control, and Dante.
-3. Forwards **only** Mgmt↔Control and Mgmt↔Dante.
-4. **SNATs** egress toward Control/Dante so devices see an on-subnet source.
-5. **Reflects** allowlisted multicast discovery/control onto Mgmt (and client multicasts back). Kernel `forward` **never** passes multicast — the reflector is the only cross-VLAN multicast path.
-6. **Drops** PTP and multicast media toward Mgmt and Control from **any** source; never forwards Control↔Dante.
-7. Install is **fail-closed**: validate nftables (`nft -c`) and load drop-forward rules before enabling IP forwarding.
+- **SNATs** client unicast toward Dante so Lake/Dante/Shure see the combiner’s Dante address (those devices often have no useful default route)
+- **Reflects** allowlisted multicast discovery/control Control↔Dante (Dante, Shure, Lake after capture). Kernel `forward` never passes multicast
+- **Drops** PTP and multicast media toward Control
+- **Never** attaches **Waves SoundGrid** (SoE clock + audio — same *class* of problem as Dante PTP)
 
-Clients use the combiner as their default gateway (DHCP on Mgmt). Apps behave as if they had a foot in each production VLAN.
+VuNET, StageMix/Editor, and MixPad stay **on-link** on Control (no SNAT, no reflector). A&H discovery is UDP broadcast; the combiner does not copy broadcast.
+
+Install is fail-closed: nftables is validated and a drop-forward policy is loaded before IP forwarding is enabled.
 
 ```text
-  [Tablet/Laptop] --Wi-Fi--> [WAP] --untagged Mgmt--> [Switch]
-                                                         |
-                                              trunk (Mgmt+Control+Dante)
-                                                         |
-                                                   [Combiner Pi]
-                                                         |
-                    +--------------------+---------------+
-                    |                    |
-             Martin Control VLAN    Dante VLAN
-                    |                    |
-              Martin amps         Lake / Dante gear
+Control VLAN (PCs, amps, mixer-control)
+        |  SNAT unicast + allowlisted mcast reflect
+        v
+Dante VLAN (Lake, Dante, Shure)
 ```
 
-## Why SNAT (“same-subnet lie”)
+Physical ports and the WAP are in [`setup.md`](setup.md). SoundGrid stays on its own switch.
 
-Amps often cannot reply off-subnet. Rather than teaching every device a gateway, the combiner:
-
-- Owns a static address on Control and on Dante
-- Masquerades client traffic so the **source IP** is the combiner’s address on that VLAN
-- Conntrack reverses the translation on replies back to Mgmt clients
-
-Multiple Mgmt clients are fine at the network layer. VuNET and Lake Controller still allow only one “brain” application instance — that is an app constraint, not a combiner feature.
-
-## Hard isolation
+## Isolation
 
 | Path | Policy |
 | --- | --- |
-| Mgmt ↔ Control | Allow **unicast** (SNAT); multicast via reflector allowlist only |
-| Mgmt ↔ Dante | Allow **unicast** (SNAT); multicast via reflector allowlist only |
-| Control ↔ Dante | **Deny** |
-| Any forwarded multicast | **Deny** in nftables `forward` |
-| PTP / media → Mgmt or Control | **Deny** from any source (counters expected non-zero when Dante is busy) |
+| Control → Dante unicast | Allow + SNAT to combiner Dante IP |
+| Dante → Control | Established/related only |
+| Control ↔ Dante multicast | Reflector allowlist only |
+| PTP / ATP (UDP 4321) / AES67 → Control | Deny |
+| SoundGrid | Not a combiner interface |
 
-The combiner must not become a sneaky bridge between Control and Dante. The meeting point is the **client software on Mgmt**, not L2/L3 between those VLANs.
+Reflected onto Control (light vs PTP): mDNS, Dante `224.0.0.230`–`233`, Shure `239.255.254.253:8427`, plus Lake groups after capture.
 
-## Data plane split
+The meeting point for Dante-side apps is **software on the Control client**, not an L2 bridge. Do not use a switch SVI as a shortcut Control→Dante ([`setup.md`](setup.md) DHCP). Break-glass: [`break-glass.md`](break-glass.md).
 
-| Layer | Responsibility |
+Multiple Control clients are fine at the network layer. VuNET and Lake still allow only one “brain” app instance — that is an application limit.
+
+## Data plane
+
+| Layer | Role |
 | --- | --- |
-| Kernel (`nftables`, VLAN ifaces, ip_forward) | Unicast SNAT, isolation, hard drops, counters |
-| Userspace reflector | Join/reflect allowlisted multicast groups; inventory discovered peers |
-| `dnsmasq` | DHCP **only** on Mgmt (optional; `mgmt_dhcp.enabled: false` leaves an existing Mgmt DHCP alone) |
-
-## Intentional routing authority
-
-Switch SVIs may exist for convenience. Do **not** use them as the control path for these apps. Mgmt clients must use the combiner as gateway. If the combiner fails, use break-glass direct attachment (see [`break-glass.md`](break-glass.md)).
-
-## MVP vs follow-on
-
-| Capability | MVP | Follow-on |
-| --- | --- | --- |
-| VuNET / Dante / Lake discovery + control unicast | Yes | — |
-| Dante Clock Status / sync health | Yes | — |
-| Dante live metering | Path cleared in nftables | Confirm end-to-end |
-| Status page + discovered hosts | Yes | — |
-| PoE / Sipeed GbE appliance | Docs only | Hardware eval |
+| `nftables` + `ip_forward` | Unicast SNAT, isolation, counters |
+| Userspace reflector | Allowlisted multicast Control↔Dante |
+| Core DHCP | Control clients; combiner does not DHCP Control or Dante |
 
 ## Non-goals
 
-- ESP32 / MCU platforms
-- Combiner as Wi-Fi AP (use a separate WAP on Mgmt)
+- Combiner as Wi-Fi AP
 - DHCP on Control or Dante
-- Relying on switch L3 or device default routes
-- Bridging Control↔Dante for convenience
+- Broadcast reflection
+- Bridging media/PTP, or attaching SoundGrid
+- ESP32 / MCU platforms

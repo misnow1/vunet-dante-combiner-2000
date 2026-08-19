@@ -37,9 +37,11 @@ func main() {
 	}
 	if site != nil {
 		s.Interfaces = []netinfo.IfaceStatus{
-			netinfo.Describe("mgmt", site.MgmtIface()),
 			netinfo.Describe("control", site.VLANs.Control.Iface(site.PhysicalInterface)),
 			netinfo.Describe("dante", site.VLANs.Dante.Iface(site.PhysicalInterface)),
+		}
+		if site.HasMgmt() {
+			s.Interfaces = append([]netinfo.IfaceStatus{netinfo.Describe("mgmt", site.MgmtIface())}, s.Interfaces...)
 		}
 	}
 
@@ -60,7 +62,6 @@ func main() {
 	fmt.Fprintf(w, "drop_ptp\t%d\n", s.NFT.DropPTP)
 	fmt.Fprintf(w, "drop_deny_mcast\t%d\n", s.NFT.DropDenyMcast)
 	fmt.Fprintf(w, "drop_forward_mcast\t%d\n", s.NFT.DropForwardMcast)
-	fmt.Fprintf(w, "drop_control_dante\t%d\n", s.NFT.DropControlDante)
 	fmt.Fprintf(w, "drop_ipv6_forward\t%d\n", s.NFT.DropIPv6Forward)
 	fmt.Fprintf(w, "snat_to_control\t%d\n", s.NFT.SNATToControl)
 	fmt.Fprintf(w, "snat_to_dante\t%d\n", s.NFT.SNATToDante)

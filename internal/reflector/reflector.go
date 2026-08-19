@@ -27,16 +27,16 @@ type Stats struct {
 	Memberships   []Membership `json:"memberships,omitempty"`
 }
 
-// Membership is a joined allowlist group on Mgmt <-> peer VLAN.
+// Membership is a joined allowlist group on Control <-> Dante.
 type Membership struct {
-	Allowlist string `json:"allowlist"`
-	Name      string `json:"name"`
-	Address   string `json:"address"`
-	Port      int    `json:"port"`
-	VLAN      string `json:"vlan"` // control|dante
-	MgmtIface string `json:"mgmt_iface"`
-	PeerIface string `json:"peer_iface"`
-	Direction string `json:"direction"`
+	Allowlist   string `json:"allowlist"`
+	Name        string `json:"name"`
+	Address     string `json:"address"`
+	Port        int    `json:"port"`
+	VLAN        string `json:"vlan"` // dante
+	ClientIface string `json:"client_iface"`
+	PeerIface   string `json:"peer_iface"`
+	Direction   string `json:"direction"`
 }
 
 type membership struct {
@@ -78,8 +78,10 @@ func New(site *config.Site, inv *inventory.Store) (*Service, error) {
 		for _, g := range al.Groups {
 			for _, addr := range g.ResolvedAddresses() {
 				ip := net.ParseIP(addr)
-				if s.denied(ip) {
-					return nil, fmt.Errorf("allowlist %s/%s address %s is on deny floor", al.Name, g.Name, addr)
+				for _, p := range g.ResolvedPorts() {
+					if s.site.DeniedUDP(ip, p) {
+						return nil, fmt.Errorf("allowlist %s/%s %s:%d is on deny floor", al.Name, g.Name, addr, p)
+					}
 				}
 			}
 		}
@@ -148,7 +150,7 @@ func multicastTTL(group net.IP) int {
 }
 
 func (s *Service) Run(ctx context.Context) error {
-	mgmt := s.site.MgmtIface()
+	clientIf := s.site.ClientIface()
 
 	byPort := map[int][]membership{}
 	seen := map[string]struct{}{} // group|port|peer
@@ -158,8 +160,8 @@ func (s *Service) Run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if peer == mgmt {
-			return fmt.Errorf("allowlist %s peer iface equals mgmt", al.Name)
+		if peer == clientIf {
+			return fmt.Errorf("allowlist %s peer iface equals control (client) iface", al.Name)
 		}
 		for _, g := range al.Groups {
 			for _, ep := range g.Endpoints() {
@@ -183,14 +185,14 @@ func (s *Service) Run(ctx context.Context) error {
 					direction: g.Direction,
 				})
 				mems = append(mems, Membership{
-					Allowlist: al.Name,
-					Name:      g.Name,
-					Address:   ip.String(),
-					Port:      ep.Port,
-					VLAN:      al.VLAN,
-					MgmtIface: mgmt,
-					PeerIface: peer,
-					Direction: g.Direction,
+					Allowlist:   al.Name,
+					Name:        g.Name,
+					Address:     ip.String(),
+					Port:        ep.Port,
+					VLAN:        al.VLAN,
+					ClientIface: clientIf,
+					PeerIface:   peer,
+					Direction:   g.Direction,
 				})
 			}
 		}
@@ -205,7 +207,7 @@ func (s *Service) Run(ctx context.Context) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := s.servePort(ctx, mgmt, port, members); err != nil && ctx.Err() == nil {
+			if err := s.servePort(ctx, clientIf, port, members); err != nil && ctx.Err() == nil {
 				log.Printf("listener udp/%d stopped: %v", port, err)
 				s.mu.Lock()
 				s.listenersFail++
@@ -215,7 +217,7 @@ func (s *Service) Run(ctx context.Context) error {
 			}
 		}()
 	}
-	log.Printf("reflector starting %d udp ports (%d group memberships)", len(byPort), len(seen))
+	log.Printf("reflector starting %d udp ports (%d group memberships) on %s <-> dante", len(byPort), len(seen), clientIf)
 	if len(byPort) == 0 {
 		log.Printf("warning: no multicast groups configured — discovery reflection idle")
 	}
@@ -254,7 +256,7 @@ func listenUDP(port int) (net.PacketConn, error) {
 	return lc.ListenPacket(context.Background(), "udp4", fmt.Sprintf("0.0.0.0:%d", port))
 }
 
-func (s *Service) servePort(ctx context.Context, mgmtIf string, port int, members []membership) error {
+func (s *Service) servePort(ctx context.Context, clientIf string, port int, members []membership) error {
 	pc, err := listenUDP(port)
 	if err != nil {
 		s.mu.Lock()
@@ -278,9 +280,9 @@ func (s *Service) servePort(ctx context.Context, mgmtIf string, port int, member
 	}
 	_ = p.SetMulticastLoopback(false)
 
-	mgmtIFI, err := net.InterfaceByName(mgmtIf)
+	clientIFI, err := net.InterfaceByName(clientIf)
 	if err != nil {
-		return fmt.Errorf("mgmt iface %s: %w", mgmtIf, err)
+		return fmt.Errorf("control iface %s: %w", clientIf, err)
 	}
 
 	peerCache := map[string]*net.Interface{}
@@ -309,10 +311,10 @@ func (s *Service) servePort(ctx context.Context, mgmtIf string, port int, member
 			}
 			peerCache[m.peerIf] = peerIFI
 		}
-		join(mgmtIFI, m.groupIP)
+		join(clientIFI, m.groupIP)
 		join(peerIFI, m.groupIP)
 		log.Printf("membership %s/%s %s udp/%d on %s <-> %s (ttl=%d)",
-			m.allowlist, m.name, m.groupIP, port, mgmtIf, m.peerIf, multicastTTL(m.groupIP))
+			m.allowlist, m.name, m.groupIP, port, clientIf, m.peerIf, multicastTTL(m.groupIP))
 	}
 	defer func() {
 		for _, j := range joined {
@@ -367,7 +369,7 @@ func (s *Service) servePort(ctx context.Context, mgmtIf string, port int, member
 			atomic.AddUint64(&s.packetsDrop, 1)
 			continue
 		}
-		if s.denied(cm.Dst) {
+		if s.denied(cm.Dst) || s.site.DeniedUDP(cm.Dst, port) {
 			atomic.AddUint64(&s.packetsDrop, 1)
 			continue
 		}
@@ -386,17 +388,17 @@ func (s *Service) servePort(ctx context.Context, mgmtIf string, port int, member
 			var outIf *net.Interface
 			var seenVLAN string
 			switch inIf {
-			case mgmtIf:
-				if m.direction == "to-mgmt" {
+			case clientIf:
+				if m.direction == "to-control" {
 					continue
 				}
 				outIf = peerIFI
-				seenVLAN = "mgmt"
+				seenVLAN = "control"
 			case m.peerIf:
-				if m.direction == "from-mgmt" {
+				if m.direction == "from-control" {
 					continue
 				}
-				outIf = mgmtIFI
+				outIf = clientIFI
 				seenVLAN = m.vlanRole
 			default:
 				continue

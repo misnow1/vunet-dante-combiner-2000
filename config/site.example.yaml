@@ -1,64 +1,54 @@
-# Example site config — production-shaped addressing.
+# Example site config — production-shaped addressing (Control + Dante).
 # Copy to /etc/combiner/site.yaml and set real 802.1Q VLAN IDs.
 #
-# Audio nets use /21 (255.255.248.0). Merged Control is a new /24.
-# If switch SVIs already own .1 on Control/Dante, change combiner addresses.
+# Clients (WAP / laptops / iPads) live on Martin Control with the amps.
+# Combiner DHCP is off; core Control DHCP option 3 must be this Control
+# address. Switch ports, DHCP, and Pi install: docs/setup.md
+#
+# Audio nets use /21 (255.255.248.0). If switch SVIs already own .1 on
+# Control/Dante, change combiner addresses.
+#
+# Optional lab Mgmt VLAN: see site.lab-flat.example.yaml (Pi uplink).
+# Never add a SoundGrid VLAN here.
 
 hostname: combiner
 physical_interface: eth0
 status_listen: ":8080"
 
 vlans:
-  # Merged Control — laptops/tablets + combiner Mgmt face
-  # Lab on a flat LAN: set untagged: true so Mgmt is native on eth0 (no eth0.<id>).
-  # Switch port: untagged/PVID = this id (or access Mgmt); Control+Dante remain tagged.
-  mgmt:
-    id: 209
-    address: 10.209.0.1
-    prefix: 24
-    # untagged: true
-    # interface_name: eth0   # optional when untagged; defaults to physical_interface
-    # Lab only — combiner's own uplink when Mgmt is a normal LAN. Production Mgmt
-    # is isolated and omits both (clients never receive DNS from Mgmt DHCP).
-    # gateway: 10.209.0.254
-    # dns: [10.209.0.254]
-    interface_name: eth0.209
-  # Martin Control — VuNET / IK amps
+  # Martin Control — VuNET, mixer-control, MixPad, control clients
   control:
     id: 200
     address: 10.200.0.1
     prefix: 21
     interface_name: eth0.200
-  # Dante Primary — Lake / Dante devices
+  # Dante Primary — Lake / Dante / Shure WWB
   dante:
     id: 201
     address: 10.201.0.1
     prefix: 21
     interface_name: eth0.201
 
+# Combiner does not run DHCP on Control or Dante (core switch / existing pools).
 mgmt_dhcp:
-  # Set enabled: false on a shared lab LAN that already has DHCP (avoids a second server).
-  # Combiner still uses a static mgmt address from vlans.mgmt — pick one outside the foreign pool.
-  # enabled: false
-  range_start: 10.209.0.100
-  range_end: 10.209.0.199
-  lease: 12h
-  domain: combiner.local
+  enabled: false
 
 # Paths relative to the config file directory, or absolute.
 allowlist_files:
   - allowlists/dante.yaml
-  - allowlists/vunet.yaml
+  - allowlists/shure.yaml
   - allowlists/lake.yaml
 
-# Hard-deny prefixes (never reflect / never forward to Mgmt or Control).
+# Hard-deny prefixes (never reflect / never forward toward Control).
 # Sole source of truth — also consumed by generate-nftables.py.
 deny_multicast_prefixes:
   - 224.0.1.128/30          # PTP 224.0.1.128-131
   - 224.0.1.132/32          # PTP 224.0.1.132
-  - 239.255.0.0/16          # Dante ATP media
   - 239.69.0.0/16           # AES67 media
   - 239.254.3.3/32          # PTP logging
+
+# ATP (239.255.0.0/16 UDP 4321) is a hardcoded nftables/reflector floor so
+# Shure Discovery 239.255.254.253:8427 is not swallowed by a /16 prefix deny.
 
 # Documented Dante unicast control/metering ports (SNAT path).
 dante_unicast_udp_ports:

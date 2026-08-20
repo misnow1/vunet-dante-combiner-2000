@@ -1,32 +1,28 @@
-# Raspberry Pi lab deploy
+# Raspberry Pi installer
 
-Installs VLAN interfaces, optional Mgmt DHCP (`dnsmasq`), fail-closed `nftables`, and the `combiner` service on Debian / Raspberry Pi OS.
+What `install.sh` does and how to recover when it fails. **Addresses, switch ports, DHCP, and the install commands to run:** **[`docs/setup.md`](../../docs/setup.md)**. Building binaries / Go / `virgil01`: [`docs/pi-prep.md`](../../docs/pi-prep.md).
+
+Installs VLAN interfaces, optional lab Mgmt DHCP (`dnsmasq`), fail-closed `nftables`, and the `combiner` service on Debian / Raspberry Pi OS.
 
 ## Prerequisites
 
 - Raspberry Pi with GbE (Pi 4/5 recommended; Pi 3 OK for early lab)
-- Switch trunk port carrying Mgmt + Control + Dante tags
+- Switch trunk and DHCP already set per **[`docs/setup.md`](../../docs/setup.md)**
 - **Local console** (serial/HDMI) recommended — install disables NetworkManager/dhcpcd
 - Edited `/etc/combiner/site.yaml` (start from `config/site.example.yaml`)
 
-**First-time Pi setup** (release download, packages, optional Go): see **[`docs/pi-prep.md`](../../docs/pi-prep.md)**.
+### Combiner DHCP (off by default)
 
-### Shared Mgmt LAN (existing DHCP)
-
-If Mgmt already has a DHCP server (typical home/lab LAN), set in `site.yaml`:
+Production Control DHCP stays on the core switch. Set `mgmt_dhcp.enabled: true` only when an optional **Mgmt** VLAN exists and you want the combiner to serve it.
 
 ```yaml
 mgmt_dhcp:
   enabled: false
 ```
 
-The installer then skips starting `dnsmasq` and removes `/etc/dnsmasq.d/combiner-mgmt.conf`. Keep a **static** `vlans.mgmt.address` that does not collide with the foreign pool. Omit or leave `range_*` unused when disabled.
-
-Default is `enabled: true` (dedicated combiner Mgmt VLAN).
-
 ### Untagged Mgmt (native VLAN / flat lab LAN)
 
-Production expects Mgmt tagged on the trunk. For lab boards on an access/native port (e.g. `virgil01` on `192.168.1.x`), use [`config/site.lab-flat.example.yaml`](../../config/site.lab-flat.example.yaml):
+Lab boards on an access/native port (e.g. `virgil01` on `192.168.1.x`) use [`config/site.lab-flat.example.yaml`](../../config/site.lab-flat.example.yaml). That Mgmt face is a **Pi uplink**, not the client network. Production clients live on Control.
 
 ```yaml
 vlans:
@@ -43,7 +39,7 @@ vlans:
 
 Mgmt L3 lands on `physical_interface` (no `eth0.<mgmt-id>`); Control and Dante stay 802.1Q subinterfaces. Switch port: untagged Mgmt + tagged Control/Dante, or a temporary access port for Mgmt-only smoke tests.
 
-**`gateway` / `dns` are lab-only.** Once `systemd-networkd` takes over the NIC with a *static* Mgmt address, the previous DHCP default route is gone — without `gateway` the Pi keeps LAN access but loses its uplink (apt, DNS). Production Mgmt is isolated and omits both; these values configure the combiner itself and are never advertised to Mgmt DHCP clients.
+**`gateway` / `dns` are lab-only** for the Pi’s own uplink. They are never advertised to Control clients.
 
 Reserve the Mgmt address in the LAN router so nothing else claims it.
 
@@ -137,14 +133,12 @@ Installing `systemd-resolved` repoints `/etc/resolv.conf` at `/run/systemd/resol
 
 ## Switch port
 
-**Production:** trunk with tagged Mgmt, Control, and Dante. Put the **WAP** on an access port **untagged Mgmt** only.
+Production trunk, WAP, and DHCP: **[`docs/setup.md`](../../docs/setup.md)**. Lab untagged Mgmt is described under [Untagged Mgmt](#untagged-mgmt-native-vlan--flat-lab-lan) above.
 
-**Lab (untagged Mgmt):** set `vlans.mgmt.untagged: true`. Switch port carries untagged/PVID Mgmt plus tagged Control and Dante (or access-only Mgmt for early bring-up).
+## Clients
 
-## Mgmt clients
-
-- When `mgmt_dhcp.enabled` is true (default): DHCP from the combiner; gateway = combiner Mgmt IP; **no DNS** — open status at `http://<mgmt-ip>:8080/`
-- When `mgmt_dhcp.enabled` is false: use the existing LAN DHCP/static addressing; status still at `http://<mgmt-ip>:8080/`
+- Production: Control SSID/access; status at `http://<control-ip>:8080/`
+- Combiner DHCP is off unless `vlans.mgmt` exists and `mgmt_dhcp.enabled` is true
 - `combiner.local` is not provided unless you add your own mDNS elsewhere
 
 ## Verify

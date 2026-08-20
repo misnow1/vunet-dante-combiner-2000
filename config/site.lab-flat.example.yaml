@@ -1,8 +1,9 @@
 # Lab config for a flat LAN that already has DHCP and no VLAN trunk yet.
 # Matches the RPi 3 test board (virgil01, eth0 = 192.168.1.2/24).
 #
-# Differences from site.example.yaml:
-#   - Mgmt is UNTAGGED (native) on eth0 — no eth0.<id> subinterface
+# Optional Mgmt is UNTAGGED on eth0 (Pi uplink only). Production clients
+# live on Control — see site.example.yaml. Reflector is Control↔Dante.
+#
 #   - Mgmt DHCP is DISABLED — the existing LAN router keeps serving DHCP
 #   - Mgmt declares gateway/dns so the Pi keeps its uplink once networkd
 #     takes over eth0 with a static address
@@ -10,6 +11,7 @@
 # Reserve/exclude 192.168.1.2 in the LAN router so nothing else claims it.
 # Control and Dante are still tagged; they stay down until the switch port
 # becomes a trunk, which is fine for install and status-page smoke tests.
+# Operator steps: docs/setup.md (lab section).
 
 hostname: combiner
 physical_interface: eth0
@@ -39,13 +41,12 @@ mgmt_dhcp:
 
 allowlist_files:
   - allowlists/dante.yaml
-  - allowlists/vunet.yaml
+  - allowlists/shure.yaml
   - allowlists/lake.yaml
 
 deny_multicast_prefixes:
   - 224.0.1.128/30
   - 224.0.1.132/32
-  - 239.255.0.0/16
   - 239.69.0.0/16
   - 239.254.3.3/32
 

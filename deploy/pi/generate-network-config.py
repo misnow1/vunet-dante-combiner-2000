@@ -55,21 +55,28 @@ def main() -> int:
     host = site.get("hostname", "combiner")
     vlans = site["vlans"]
     dhcp = site.get("mgmt_dhcp") or {}
-    dhcp_enabled = dhcp.get("enabled", True)
+    dhcp_enabled = bool(dhcp.get("enabled", False))
 
-    mgmt = vlans["mgmt"]
-    mgmt_untagged = bool(mgmt.get("untagged"))
-    mgmt_if = role_iface("mgmt", mgmt, phys)
+    mgmt = vlans.get("mgmt")
+    has_mgmt = isinstance(mgmt, dict) and bool(mgmt.get("address"))
+    if dhcp_enabled and not has_mgmt:
+        raise SystemExit("mgmt_dhcp.enabled requires vlans.mgmt")
 
-    # Lab uplink only: production Mgmt is isolated and declares neither.
+    mgmt_untagged = bool(has_mgmt and mgmt.get("untagged"))
+    mgmt_if = role_iface("mgmt", mgmt, phys) if has_mgmt else ""
+
+    # Lab uplink only: optional Mgmt that has an upstream default route.
     mgmt_extra = ""
-    if mgmt.get("gateway"):
-        mgmt_extra += f"Gateway={mgmt['gateway']}\n"
-    for d in mgmt.get("dns") or []:
-        mgmt_extra += f"DNS={d}\n"
+    if has_mgmt:
+        if mgmt.get("gateway"):
+            mgmt_extra += f"Gateway={mgmt['gateway']}\n"
+        for d in mgmt.get("dns") or []:
+            mgmt_extra += f"DNS={d}\n"
 
     tagged_ifaces: list[str] = []
     for role, v in vlans.items():
+        if not isinstance(v, dict) or not v.get("address"):
+            continue
         if role == "mgmt" and v.get("untagged"):
             continue
         tagged_ifaces.append(role_iface(role, v, phys))
@@ -107,6 +114,8 @@ LLMNR=no
         )
 
     for role, v in vlans.items():
+        if not isinstance(v, dict) or not v.get("address"):
+            continue
         if role == "mgmt" and v.get("untagged"):
             continue  # L3 lives on the parent unit above
         ifname = role_iface(role, v, phys)
@@ -137,7 +146,11 @@ ConfigureWithoutCarrier=yes
     write(out / "combiner-mgmt-dhcp.enabled", "1\n" if dhcp_enabled else "0\n")
     write(
         out / "combiner-interfaces.txt",
-        "".join(f"{role} {role_iface(role, v, phys)}\n" for role, v in vlans.items()),
+        "".join(
+            f"{role} {role_iface(role, v, phys)}\n"
+            for role, v in vlans.items()
+            if isinstance(v, dict) and v.get("address")
+        ),
     )
 
     if dhcp_enabled:

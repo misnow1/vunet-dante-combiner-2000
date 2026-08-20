@@ -4,6 +4,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/msnow/vunet-dante-combiner-2000/internal/config"
@@ -30,8 +31,21 @@ func TestLoadExampleSite(t *testing.T) {
 	if danteGroups < 1 {
 		t.Fatal("expected dante groups")
 	}
-	if site.MgmtIface() != "eth0.209" {
-		t.Fatalf("mgmt iface %s", site.MgmtIface())
+	if site.MgmtIface() != "" {
+		t.Fatalf("production example must omit mgmt, got %s", site.MgmtIface())
+	}
+	if site.ClientIface() != "eth0.200" {
+		t.Fatalf("client iface %s", site.ClientIface())
+	}
+	if site.MgmtDHCP.IsEnabled() {
+		t.Fatal("example site should leave DHCP disabled")
+	}
+	var names []string
+	for _, al := range site.Allowlists {
+		names = append(names, al.Name)
+	}
+	if strings.Join(names, ",") != "dante,shure,lake" {
+		t.Fatalf("allowlist names %v", names)
 	}
 	if !site.Denied(net.ParseIP("224.0.1.129")) {
 		t.Fatal("expected 224.0.1.129 denied")
@@ -39,11 +53,20 @@ func TestLoadExampleSite(t *testing.T) {
 	if !site.Denied(net.ParseIP("224.0.1.132")) {
 		t.Fatal("expected 224.0.1.132 denied")
 	}
-	if !site.Denied(net.ParseIP("239.255.1.1")) {
-		t.Fatal("expected media prefix denied")
+	if !site.Denied(net.ParseIP("239.69.1.1")) {
+		t.Fatal("expected AES67 prefix denied")
+	}
+	if site.Denied(net.ParseIP("239.255.1.1")) {
+		t.Fatal("ATP prefix must not deny all of 239.255.0.0/16 (Shure Discovery lives there)")
 	}
 	if site.Denied(net.ParseIP("224.0.0.251")) {
 		t.Fatal("mDNS must not be denied")
+	}
+	if site.DeniedUDP(net.ParseIP("239.255.1.1"), 4321) == false {
+		t.Fatal("ATP 239.255.0.0/16 UDP 4321 must be denied")
+	}
+	if site.DeniedUDP(net.ParseIP("239.255.254.253"), 8427) {
+		t.Fatal("Shure discovery UDP 8427 must be reflectable")
 	}
 }
 
@@ -96,14 +119,43 @@ deny_multicast_prefixes: [224.0.1.128/30, 224.0.1.132/32, 239.255.0.0/16]
 	}
 }
 
-func TestMgmtDHCPEnabledByDefault(t *testing.T) {
+func TestMgmtDHCPDisabledByDefault(t *testing.T) {
 	root := filepath.Join("..", "..", "config", "site.example.yaml")
 	site, err := config.LoadSite(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !site.MgmtDHCP.IsEnabled() {
-		t.Fatal("example site should leave DHCP enabled by default")
+	if site.MgmtDHCP.IsEnabled() {
+		t.Fatal("example site should leave DHCP disabled")
+	}
+}
+
+func TestLoadLabFlatOptionalMgmt(t *testing.T) {
+	root := filepath.Join("..", "..", "config", "site.lab-flat.example.yaml")
+	site, err := config.LoadSite(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !site.HasMgmt() {
+		t.Fatal("lab-flat should configure mgmt")
+	}
+	if site.MgmtIface() != "eth0" {
+		t.Fatalf("mgmt iface %s", site.MgmtIface())
+	}
+}
+
+func TestRejectAllowlistVLANControl(t *testing.T) {
+	dir := t.TempDir()
+	path := writeSiteWithAllowlist(t, dir, `
+name: t
+vlan: control
+groups:
+  - name: mdns
+    address: 224.0.0.251
+    port: 5353
+`)
+	if _, err := config.LoadSite(path); err == nil {
+		t.Fatal("expected control vlan allowlist error")
 	}
 }
 

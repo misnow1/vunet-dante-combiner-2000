@@ -1,8 +1,8 @@
-# Prepare a Raspberry Pi for the combiner
+# Build binaries and lab boards
 
-Lab bring-up for Debian / Raspberry Pi OS before running [`deploy/pi/install.sh`](../deploy/pi/install.sh).
+If you are installing a combiner on a show network, start at **[`setup.md`](setup.md)** (addresses, switch, DHCP, release tarball, `install.sh`). This page is for **developers**: matching `arm` vs `arm64`, Go, cross-compile, and the `virgil01` lab Pi.
 
-**Lab board:** Raspberry Pi **3** `virgil01` at `192.168.1.2`, running **64-bit** Raspberry Pi OS (`uname -m` → `aarch64`). Prefer the **`linux-arm64` release tarball**, or **`make build-pi`** when developing. Prefer Pi **4/5** later for trunked / GbE work; Pi 3 is 100 Mbps Ethernet and short on RAM for on-device `go build`.
+**Lab board:** Raspberry Pi **3** `virgil01` at `192.168.1.2`, **64-bit** Raspberry Pi OS (`uname -m` → `aarch64`). Use the **`linux-arm64` release tarball**, or **`make build-pi`**. Prefer Pi **4/5** for production trunks (GbE); Pi 3 is 100 Mbps and short on RAM for on-device `go build`.
 
 ## Ways to get binaries onto the Pi
 
@@ -50,7 +50,7 @@ cd vunet-dante-combiner-VERSION-linux-arm64
 # optional: sha256sum -c SHA256SUMS  (if you also downloaded SHA256SUMS into this directory's parent)
 ```
 
-The tree already has `bin/combiner`, `bin/combiner-status`, `config/`, and `deploy/pi/`. Continue with site config and [`../deploy/pi/README.md`](../deploy/pi/README.md).
+The tree already has `bin/combiner`, `bin/combiner-status`, `config/`, and `deploy/pi/`. Field install continues in [`setup.md`](setup.md). Installer troubleshooting: [`../deploy/pi/README.md`](../deploy/pi/README.md).
 
 Maintainers publish packages by pushing a tag: `git tag v0.1.0 && git push origin v0.1.0`.
 
@@ -189,13 +189,13 @@ Or rsync/scp from your laptop. Then either build on-device or drop prebuilt bina
 
 ## Minimal lab config (no production trunk yet)
 
-For first smoke tests on a single LAN (`virgil01` at `192.168.1.2`), you still need three **VLAN IDs** on a trunk to exercise the full installer. Until the switch is ready:
+For first smoke tests on a single LAN (`virgil01` at `192.168.1.2`), use [`config/site.lab-flat.example.yaml`](../config/site.lab-flat.example.yaml) (optional untagged Mgmt). Production Control+Dante is [`config/site.example.yaml`](../config/site.example.yaml). Until the switch is ready:
 
 1. Use a release tree or cross-compiled binaries and run `./bin/combiner -check -config config/site.example.yaml`
 2. Generate nftables only: `python3 deploy/pi/generate-nftables.py config/site.example.yaml /tmp/nft.conf && sudo nft -c -f /tmp/nft.conf`
 3. Do **not** run full `install.sh` over SSH without `--i-have-console` — it rewrites networking
 
-Edit `config/site.example.yaml` → `/etc/combiner/site.yaml` with real VLAN IDs and addresses before a full install. On a shared lab LAN that already runs DHCP, set `mgmt_dhcp.enabled: false` so `install.sh` does not start dnsmasq. For native/untagged Mgmt on the Pi NIC, set `vlans.mgmt.untagged: true`. Production-shaped defaults are documented in [`packet-flow.md`](packet-flow.md).
+Edit `site.yaml` with real VLAN IDs and addresses before a full install. Combiner DHCP is off unless you explicitly enable it on an optional Mgmt VLAN. Switch, DHCP, and the canonical install steps: [`setup.md`](setup.md).
 
 ---
 
@@ -207,6 +207,6 @@ Edit `config/site.example.yaml` → `/etc/combiner/site.yaml` with real VLAN IDs
 - [ ] Release tree **or** repo with `bin/combiner` + `bin/combiner-status` (or `go` to build them)
 - [ ] `/etc/combiner/site.yaml` edited for this site
 - [ ] Local console available (or you accept `--i-have-console` over SSH knowing you may lock yourself out)
-- [ ] Switch trunk prepared for Mgmt + Control + Dante tags
+- [ ] Switch + DHCP prepared per [`setup.md`](setup.md)
 
-Then continue with [`../deploy/pi/README.md`](../deploy/pi/README.md).
+Then continue with [`setup.md`](setup.md) or [`../deploy/pi/README.md`](../deploy/pi/README.md) if the installer fails.

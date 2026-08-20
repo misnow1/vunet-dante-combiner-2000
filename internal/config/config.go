@@ -62,8 +62,8 @@ func (v VLAN) Network() (*net.IPNet, error) {
 }
 
 type MgmtDHCP struct {
-	// Enabled defaults to true when omitted. Set false to skip dnsmasq
-	// (lab on a shared Mgmt LAN that already has DHCP).
+	// Enabled defaults to false when omitted. Combiner DHCP is off unless
+	// an optional Mgmt VLAN is present and this is set true.
 	Enabled    *bool  `yaml:"enabled"`
 	RangeStart string `yaml:"range_start"`
 	RangeEnd   string `yaml:"range_end"`
@@ -71,17 +71,17 @@ type MgmtDHCP struct {
 	Domain     string `yaml:"domain"`
 }
 
-// IsEnabled reports whether Mgmt DHCP/dnsmasq should run (default true).
+// IsEnabled reports whether Mgmt DHCP/dnsmasq should run (default false).
 func (d MgmtDHCP) IsEnabled() bool {
 	if d.Enabled == nil {
-		return true
+		return false
 	}
 	return *d.Enabled
 }
 
 type Allowlist struct {
 	Name   string       `yaml:"name"`
-	VLAN   string       `yaml:"vlan"` // control|dante only
+	VLAN   string       `yaml:"vlan"` // dante only
 	Groups []AllowGroup `yaml:"groups"`
 }
 
@@ -93,7 +93,7 @@ type AllowGroup struct {
 	PortEnd   int      `yaml:"port_end"`
 	Ports     []int    `yaml:"ports"`
 	Proto     string   `yaml:"proto"`
-	Direction string   `yaml:"direction"` // both|to-mgmt|from-mgmt
+	Direction string   `yaml:"direction"` // both|to-control|from-control (to-mgmt/from-mgmt are aliases)
 	Notes     string   `yaml:"notes"`
 }
 
@@ -234,8 +234,8 @@ func loadAllowlist(path string) (*Allowlist, error) {
 		return nil, err
 	}
 	role := strings.ToLower(al.VLAN)
-	if role != "control" && role != "dante" {
-		return nil, fmt.Errorf("vlan must be control or dante, got %q", al.VLAN)
+	if role != "dante" {
+		return nil, fmt.Errorf("vlan must be dante (Control-native protocols are not reflected), got %q", al.VLAN)
 	}
 	al.VLAN = role
 	for i := range al.Groups {
@@ -247,7 +247,13 @@ func loadAllowlist(path string) (*Allowlist, error) {
 			g.Direction = "both"
 		}
 		switch g.Direction {
-		case "both", "to-mgmt", "from-mgmt":
+		case "to-mgmt":
+			g.Direction = "to-control"
+		case "from-mgmt":
+			g.Direction = "from-control"
+		}
+		switch g.Direction {
+		case "both", "to-control", "from-control":
 		default:
 			return nil, fmt.Errorf("group %s: bad direction %q", g.Name, g.Direction)
 		}
@@ -315,23 +321,44 @@ func validateAllowGroupPorts(g *AllowGroup) error {
 	return nil
 }
 
+func (v VLAN) Configured() bool {
+	return v.ID != 0 || v.Address != "" || v.Untagged || v.InterfaceName != "" || v.Gateway != "" || len(v.DNS) > 0
+}
+
+func (s *Site) HasMgmt() bool {
+	return s.VLANs.Mgmt.Configured()
+}
+
 func (s *Site) validate() error {
 	if s.PhysicalInterface == "" {
 		return fmt.Errorf("physical_interface required")
 	}
 	vlans := []struct {
-		name string
-		v    VLAN
+		name     string
+		v        VLAN
+		required bool
 	}{
-		{"mgmt", s.VLANs.Mgmt},
-		{"control", s.VLANs.Control},
-		{"dante", s.VLANs.Dante},
+		{"mgmt", s.VLANs.Mgmt, false},
+		{"control", s.VLANs.Control, true},
+		{"dante", s.VLANs.Dante, true},
 	}
 	ids := map[int]string{}
 	ifaces := map[string]string{}
 	var nets []*net.IPNet
 	for _, item := range vlans {
 		v := item.v
+		if !v.Configured() {
+			if item.required {
+				return fmt.Errorf("%s: vlan required", item.name)
+			}
+			continue
+		}
+		if v.ID < 1 || v.ID > 4094 {
+			return fmt.Errorf("%s: invalid vlan id %d", item.name, v.ID)
+		}
+		if v.Address == "" {
+			return fmt.Errorf("%s: address required", item.name)
+		}
 		if v.Untagged && item.name != "mgmt" {
 			return fmt.Errorf("%s: untagged is only allowed on mgmt", item.name)
 		}
@@ -355,9 +382,6 @@ func (s *Site) validate() error {
 			if ip := net.ParseIP(d); ip == nil || ip.To4() == nil {
 				return fmt.Errorf("%s: dns %q must be IPv4", item.name, d)
 			}
-		}
-		if v.ID < 1 || v.ID > 4094 {
-			return fmt.Errorf("%s: invalid vlan id %d", item.name, v.ID)
 		}
 		if prev, ok := ids[v.ID]; ok {
 			return fmt.Errorf("duplicate vlan id %d (%s and %s)", v.ID, prev, item.name)
@@ -392,22 +416,27 @@ func (s *Site) validate() error {
 		ifaces[ifi] = item.name
 	}
 
-	if gw := s.VLANs.Mgmt.Gateway; gw != "" {
-		ip := net.ParseIP(gw)
-		if ip == nil || ip.To4() == nil {
-			return fmt.Errorf("mgmt: gateway %q must be IPv4", gw)
-		}
-		mgmtNet, err := s.VLANs.Mgmt.Network()
-		if err != nil {
-			return err
-		}
-		if !mgmtNet.Contains(ip) {
-			return fmt.Errorf("mgmt: gateway %s outside mgmt subnet %s", gw, mgmtNet)
+	if s.HasMgmt() {
+		if gw := s.VLANs.Mgmt.Gateway; gw != "" {
+			ip := net.ParseIP(gw)
+			if ip == nil || ip.To4() == nil {
+				return fmt.Errorf("mgmt: gateway %q must be IPv4", gw)
+			}
+			mgmtNet, err := s.VLANs.Mgmt.Network()
+			if err != nil {
+				return err
+			}
+			if !mgmtNet.Contains(ip) {
+				return fmt.Errorf("mgmt: gateway %s outside mgmt subnet %s", gw, mgmtNet)
+			}
 		}
 	}
 
 	if !s.MgmtDHCP.IsEnabled() {
 		return nil
+	}
+	if !s.HasMgmt() {
+		return fmt.Errorf("mgmt_dhcp.enabled requires vlans.mgmt")
 	}
 	start := net.ParseIP(s.MgmtDHCP.RangeStart)
 	end := net.ParseIP(s.MgmtDHCP.RangeEnd)
@@ -425,16 +454,21 @@ func (s *Site) validate() error {
 func (s *Site) PeerIface(role string) (string, error) {
 	phys := s.PhysicalInterface
 	switch strings.ToLower(role) {
-	case "control":
-		return s.VLANs.Control.Iface(phys), nil
 	case "dante":
 		return s.VLANs.Dante.Iface(phys), nil
 	default:
-		return "", fmt.Errorf("unknown vlan role %q (want control|dante)", role)
+		return "", fmt.Errorf("unknown vlan role %q (want dante)", role)
 	}
 }
 
+func (s *Site) ClientIface() string {
+	return s.VLANs.Control.Iface(s.PhysicalInterface)
+}
+
 func (s *Site) MgmtIface() string {
+	if !s.HasMgmt() {
+		return ""
+	}
 	return s.VLANs.Mgmt.Iface(s.PhysicalInterface)
 }
 
@@ -451,6 +485,30 @@ func (s *Site) Denied(ip net.IP) bool {
 		if n.Contains(ip) {
 			return true
 		}
+	}
+	return false
+}
+
+func init() {
+	_, n, err := net.ParseCIDR("239.255.0.0/16")
+	if err != nil {
+		panic(err)
+	}
+	atpMediaNet = n
+}
+
+// ATP media (Audinate). Same /16 as Shure Discovery 239.255.254.253 — match UDP 4321 only.
+var atpMediaNet *net.IPNet
+
+const atpMediaPort = 4321
+
+// DeniedUDP is the reflector/nftables floor: site prefixes plus ATP (239.255.0.0/16 UDP 4321).
+func (s *Site) DeniedUDP(ip net.IP, port int) bool {
+	if s.Denied(ip) {
+		return true
+	}
+	if ip != nil && port == atpMediaPort && atpMediaNet.Contains(ip) {
+		return true
 	}
 	return false
 }

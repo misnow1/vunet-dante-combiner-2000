@@ -1,0 +1,14 @@
+# Shure Wireless Workbench discovery — Dante VLAN.
+# WWB/control apps sit on Control; this group is reflected Control↔Dante.
+# mDNS 224.0.0.251:5353 is already in dante.yaml — do not duplicate.
+# Do NOT add PTP, ATP, AES67, or SSDP here.
+
+name: shure
+vlan: dante
+groups:
+  - name: shure-discovery
+    address: 239.255.254.253
+    port: 8427
+    proto: udp
+    direction: both
+    notes: Shure Discovery / multicast SLP (WWB). Same /16 as Dante ATP; ATP is denied on UDP 4321 only.

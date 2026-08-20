@@ -53,7 +53,7 @@ func TestLoadExampleSite(t *testing.T) {
 	if !site.Denied(net.ParseIP("224.0.1.132")) {
 		t.Fatal("expected 224.0.1.132 denied")
 	}
-    if !site.Denied(net.ParseIP("239.69.1.1")) {
+	if !site.Denied(net.ParseIP("239.69.1.1")) {
 		t.Fatal("expected AES67 prefix denied")
 	}
 	if site.Denied(net.ParseIP("239.255.1.1")) {

@@ -17,30 +17,63 @@ Clients and the WAP live on **Martin Control** with the amps. The combiner is a 
 
 VuNET, StageMix/Editor, and MixPad stay **on-link** on Control (no SNAT, no reflector). A&H discovery is UDP broadcast; the combiner does not copy broadcast.
 
+### What SNAT cannot carry
+
+SNAT works for a protocol whose devices only ever **answer** the controller. It cannot carry one whose devices must **reach** the controller, or that checks for an on-subnet peer.
+
+**Dante Controller is the second kind.** Discovery and some control survive SNAT, but the **metering tab and device configuration require L2 adjacency** and do not. Measured on a live rig: unicast to Dante devices on `udp/8700` is delivered and every flow stays `[UNREPLIED]`, with NAT applied correctly. This is an Audinate constraint, not a combiner defect — no ruleset change fixes it.
+
+**Martin VuNET is the first kind**, and is the mirror image: discovery is multicast query/response on `239.254.10.2`, and control is client-initiated long-lived TCP to amp port `63489`, with no amp-originated traffic at all. It NATs cleanly.
+
+So the two protocols want opposite sides of the combiner, and which one gets to be native is a deployment choice — see below. Details and captures: [`protocols.md`](protocols.md).
+
+### Two profiles
+
+`client_vlan` (default `control`) selects which side the control clients sit on. It moves the reflector's client side, the unicast forward direction, and the SNAT target.
+
+| | `client_vlan: control` (default) | `client_vlan: dante` |
+| --- | --- | --- |
+| Clients live on | Control, with the amps | Dante Primary, with the Dante devices |
+| Native (full function) | VuNET, mixer control, MixPad | **Dante Controller, Shure WWB, Lake** |
+| Reflected + SNATed | Dante, Shure, Lake | **Martin VuNET** |
+| Dante metering / device config | **Not available** | Works |
+| Example | [`site.example.yaml`](../config/site.example.yaml) | [`site.dante-client.example.yaml`](../config/site.dante-client.example.yaml) |
+
+Pick `dante` when the operator needs full Dante Controller. Keep the default when clients are **tablets on Wi-Fi**: that profile puts the WAP on Dante Primary, exposing PTP and any multicast audio to a medium that carries multicast at low basic rates — the same *class* of problem the design avoids for the amp stack.
+
+What `client_vlan` deliberately does **not** move is the PTP/AES67/ATP deny direction. Those stay anchored to Control because they exist to keep the amp stack quiet. Letting them follow the client would drop PTP toward Dante and break the clock of the network the combiner exists to carry.
+
 Install is fail-closed: nftables is validated and a drop-forward policy is loaded before IP forwarding is enabled.
 
 ```text
-Control VLAN (PCs, amps, mixer-control)
-        |  SNAT unicast + allowlisted mcast reflect
-        v
-Dante VLAN (Lake, Dante, Shure)
+client_vlan: control (default)        client_vlan: dante
+Control VLAN (PCs, amps, mixer)       Dante VLAN (PCs, Lake, Dante, Shure)
+        |                                     |
+        |  SNAT unicast +                     |  SNAT unicast +
+        |  allowlisted mcast reflect          |  allowlisted mcast reflect
+        v                                     v
+Dante VLAN (Lake, Dante, Shure)       Control VLAN (amps, mixer control)
 ```
+
+In both directions the PTP/media denies point at **Control** — they do not flip.
 
 Physical ports and the WAP are in [`setup.md`](setup.md). SoundGrid stays on its own switch.
 
 ## Isolation
 
+Roles below are **client** and **peer**, which follow `client_vlan`; under the default profile the client is Control and the peer is Dante.
+
 | Path | Policy |
 | --- | --- |
-| Control → Dante unicast | Allow + SNAT to combiner Dante IP |
-| Dante → Control | Established/related only |
-| Control ↔ Dante multicast | Reflector allowlist only |
+| Client → peer unicast | Allow + SNAT to the combiner's peer-side IP |
+| Peer → client | Established/related only |
+| Client ↔ peer multicast | Reflector allowlist only |
 | PTP / ATP (UDP 4321) / AES67 → Control | Deny |
 | SoundGrid | Not a combiner interface |
 
-Reflected onto Control (light vs PTP): mDNS, Dante `224.0.0.230`–`233`, Shure `239.255.254.253:8427`, plus Lake groups after capture.
+Reflected under the **default** profile (light vs PTP): mDNS, Dante `224.0.0.230`–`233`, Shure `239.255.254.253:8427`, plus Lake groups after capture. Under `client_vlan: dante` the single reflected group is VuNET `239.254.10.2:6002,54077` — Dante, Shure and Lake are all native to the client there and must not be listed.
 
-The meeting point for Dante-side apps is **software on the Control client**, not an L2 bridge. Do not use a switch SVI as a shortcut Control→Dante ([`setup.md`](setup.md) DHCP). Break-glass: [`break-glass.md`](break-glass.md).
+The meeting point for the reflected side's apps is **software on the client**, not an L2 bridge. Do not use a switch SVI as a shortcut Control→Dante ([`setup.md`](setup.md) DHCP). Break-glass: [`break-glass.md`](break-glass.md).
 
 Multiple Control clients are fine at the network layer. VuNET and Lake still allow only one “brain” app instance — that is an application limit.
 
@@ -49,7 +82,7 @@ Multiple Control clients are fine at the network layer. VuNET and Lake still all
 | Layer | Role |
 | --- | --- |
 | `nftables` + `ip_forward` | Unicast SNAT, isolation, counters |
-| Userspace reflector | Allowlisted multicast Control↔Dante |
+| Userspace reflector | Allowlisted multicast client↔peer |
 | Core DHCP | Control clients; combiner does not DHCP Control or Dante |
 
 ## Non-goals

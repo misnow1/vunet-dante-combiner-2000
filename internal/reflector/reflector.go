@@ -27,13 +27,13 @@ type Stats struct {
 	Memberships   []Membership `json:"memberships,omitempty"`
 }
 
-// Membership is a joined allowlist group on Control <-> Dante.
+// Membership is a joined allowlist group on the client VLAN <-> its peer.
 type Membership struct {
 	Allowlist   string `json:"allowlist"`
 	Name        string `json:"name"`
 	Address     string `json:"address"`
 	Port        int    `json:"port"`
-	VLAN        string `json:"vlan"` // dante
+	VLAN        string `json:"vlan"` // the peer role (follows client_vlan)
 	ClientIface string `json:"client_iface"`
 	PeerIface   string `json:"peer_iface"`
 	Direction   string `json:"direction"`
@@ -161,7 +161,7 @@ func (s *Service) Run(ctx context.Context) error {
 			return err
 		}
 		if peer == clientIf {
-			return fmt.Errorf("allowlist %s peer iface equals control (client) iface", al.Name)
+			return fmt.Errorf("allowlist %s peer iface %s equals the client iface", al.Name, peer)
 		}
 		for _, g := range al.Groups {
 			for _, ep := range g.Endpoints() {
@@ -217,7 +217,9 @@ func (s *Service) Run(ctx context.Context) error {
 			}
 		}()
 	}
-	log.Printf("reflector starting %d udp ports (%d group memberships) on %s <-> dante", len(byPort), len(seen), clientIf)
+	// The peer role follows client_vlan, so it cannot be hardcoded: under
+	// client_vlan: dante the client is Dante and the peer is Control.
+	log.Printf("reflector starting %d udp ports (%d group memberships) on %s <-> %s", len(byPort), len(seen), clientIf, s.site.PeerRole())
 	if len(byPort) == 0 {
 		log.Printf("warning: no multicast groups configured — discovery reflection idle")
 	}

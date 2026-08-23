@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"text/tabwriter"
 
 	"github.com/msnow/vunet-dante-combiner-2000/internal/config"
@@ -59,12 +60,24 @@ func main() {
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "COUNTER\tPACKETS")
-	fmt.Fprintf(w, "drop_ptp\t%d\n", s.NFT.DropPTP)
-	fmt.Fprintf(w, "drop_deny_mcast\t%d\n", s.NFT.DropDenyMcast)
-	fmt.Fprintf(w, "drop_forward_mcast\t%d\n", s.NFT.DropForwardMcast)
-	fmt.Fprintf(w, "drop_ipv6_forward\t%d\n", s.NFT.DropIPv6Forward)
-	fmt.Fprintf(w, "snat_to_control\t%d\n", s.NFT.SNATToControl)
-	fmt.Fprintf(w, "snat_to_dante\t%d\n", s.NFT.SNATToDante)
+	// When nft could not be read the counters are unknown, not zero. Printing
+	// "0" next to an error reads as "nothing is being dropped", which is the
+	// opposite of what an operator should conclude mid-outage.
+	n := func(v uint64) string {
+		if s.NFT.Error != "" {
+			return "-"
+		}
+		return strconv.FormatUint(v, 10)
+	}
+	fmt.Fprintf(w, "drop_ptp\t%s\n", n(s.NFT.DropPTP))
+	fmt.Fprintf(w, "drop_deny_mcast\t%s\n", n(s.NFT.DropDenyMcast))
+	fmt.Fprintf(w, "drop_forward_mcast\t%s\n", n(s.NFT.DropForwardMcast))
+	fmt.Fprintf(w, "drop_ipv6_forward\t%s\n", n(s.NFT.DropIPv6Forward))
+	// The catch-all drop at the end of the forward chain: the first counter
+	// worth looking at when traffic is not crossing VLANs.
+	fmt.Fprintf(w, "drop_invalid_path\t%s\n", n(s.NFT.DropInvalidPath))
+	fmt.Fprintf(w, "snat_to_control\t%s\n", n(s.NFT.SNATToControl))
+	fmt.Fprintf(w, "snat_to_dante\t%s\n", n(s.NFT.SNATToDante))
 	if s.NFT.Error != "" {
 		fmt.Fprintf(w, "nft_error\t%s\n", s.NFT.Error)
 	}

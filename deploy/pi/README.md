@@ -191,6 +191,14 @@ Healthy on a live Dante network: `drop_ptp` / `drop_forward_mcast` may be non-ze
 
 ## Regenerating nftables only
 
+**Editing `/etc/combiner/site.yaml` and restarting `combiner` is not enough.**
+The reflector re-reads the YAML on restart, but the firewall and NAT rules are
+only rewritten by `install.sh` or by the procedure below. Skipping it leaves the
+kernel enforcing rules generated from the *previous* config while `combiner`
+reports the new one — in particular a `snat_to_dante` rule pointing at an
+address the box no longer holds, which makes every Control→Dante reply
+undeliverable and leaves the flows `[UNREPLIED]` in `conntrack -L`.
+
 ```bash
 sudo ./deploy/pi/generate-nftables.sh /etc/combiner/site.yaml /tmp/nft.conf
 sudo nft -c -f /tmp/nft.conf
@@ -198,3 +206,24 @@ sudo cp /tmp/nft.conf /etc/nftables.conf
 sudo nft -f /etc/nftables.conf
 sudo conntrack -F || true
 ```
+
+`conntrack -F` is required, not optional: NAT is applied to a flow's first
+packet, so established entries keep the old mapping until they expire.
+
+### Checking for drift
+
+`combiner -check` compares the ruleset actually loaded in the kernel against
+`site.yaml` and exits non-zero when they disagree:
+
+```bash
+sudo combiner -config /etc/combiner/site.yaml -check
+```
+
+```
+nftables drift   none (snat_to_dante -> 10.201.0.1, dante iface eth0, control iface eth0.200)
+```
+
+A mismatch names the offending rule and prints the regeneration commands. Run it
+after any `site.yaml` edit. It needs root — `nft` cannot read the ruleset
+otherwise — and is skipped with a note on hosts where `nft` is absent, so it is
+safe to run from a laptop.

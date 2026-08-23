@@ -16,6 +16,7 @@ import (
 	"github.com/msnow/vunet-dante-combiner-2000/internal/config"
 	"github.com/msnow/vunet-dante-combiner-2000/internal/inventory"
 	"github.com/msnow/vunet-dante-combiner-2000/internal/netinfo"
+	"github.com/msnow/vunet-dante-combiner-2000/internal/nftverify"
 	"github.com/msnow/vunet-dante-combiner-2000/internal/reflector"
 	"github.com/msnow/vunet-dante-combiner-2000/internal/statushttp"
 )
@@ -24,7 +25,7 @@ import (
 // errors have already exited non-zero by this point; a missing interface is
 // reported as a warning because -check is also run on laptops, where the VLAN
 // devices legitimately do not exist.
-func preflight(out *os.File, path string, site *config.Site, ref *reflector.Service) {
+func preflight(out *os.File, path string, site *config.Site, ref *reflector.Service) (ok bool) {
 	fmt.Fprintf(out, "config OK: %s\n\n", path)
 
 	type row struct {
@@ -83,6 +84,27 @@ func preflight(out *os.File, path string, site *config.Site, ref *reflector.Serv
 	fmt.Fprintf(w, "reflector\t%d group memberships on %d udp ports\n", ref.Stats().Groups, len(ports))
 	_ = w.Flush()
 
+	// Comparing the loaded ruleset against the config is the whole point of a
+	// preflight: validating site.yaml in isolation cannot see that the kernel
+	// is still enforcing rules generated from an older copy of it.
+	fmt.Fprintln(out)
+	drift := nftverify.Verify(site)
+	switch {
+	case drift.Skipped != "":
+		fmt.Fprintf(out, "nftables drift   skipped (%s)\n", drift.Skipped)
+	case drift.OK():
+		fmt.Fprintf(out, "nftables drift   none (%s)\n", strings.Join(drift.Checked, ", "))
+	default:
+		fmt.Fprintln(out, "nftables drift   MISMATCH")
+		for _, p := range drift.Problems {
+			fmt.Fprintf(out, "  - %s\n", p)
+		}
+		fmt.Fprintln(out, "  the loaded ruleset disagrees with site.yaml; traffic follows the")
+		fmt.Fprintln(out, "  ruleset, not the YAML. Regenerate and reload:")
+		fmt.Fprintf(out, "    sudo python3 deploy/pi/generate-nftables.py %s /etc/nftables.conf\n", path)
+		fmt.Fprintln(out, "    sudo nft -f /etc/nftables.conf && sudo conntrack -F")
+	}
+
 	if ref.Stats().Groups == 0 {
 		fmt.Fprintln(out, "\nWARNING: no multicast groups allowlisted — discovery reflection will be idle")
 	}
@@ -90,6 +112,10 @@ func preflight(out *os.File, path string, site *config.Site, ref *reflector.Serv
 		fmt.Fprintf(out, "\nWARNING: interface(s) not present: %s\n", strings.Join(missing, ", "))
 		fmt.Fprintln(out, "         combiner will exit at startup until systemd-networkd creates them")
 	}
+
+	// Missing interfaces stay a warning (-check runs on laptops too); only a
+	// ruleset that contradicts the config fails the preflight.
+	return drift.OK()
 }
 
 func main() {
@@ -111,7 +137,11 @@ func main() {
 	}
 
 	if *checkOnly {
-		preflight(os.Stdout, *cfgPath, site, ref)
+		// Exit non-zero on drift so install scripts and CI treat a stale
+		// ruleset as the failure it is.
+		if !preflight(os.Stdout, *cfgPath, site, ref) {
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 

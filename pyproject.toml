@@ -40,6 +40,7 @@ warn_unused_ignores = true
 files = [
   "deploy/pi/generate-nftables.py",
   "deploy/pi/generate-network-config.py",
+  "deploy/pi/site_config.py",
   "deploy/pi/tests",
 ]
 

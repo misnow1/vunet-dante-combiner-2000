@@ -8,7 +8,7 @@ A portable Linux gateway so one control client (laptop or tablet) on the **Marti
 
 ## What it does
 
-- Attaches to a switch **trunk** with **Martin Control** and **Dante** (optional lab Mgmt for the Pi uplink)
+- Attaches to a switch **trunk** with **Martin Control** and **Dante** (optional lab Mgmt for the Pi uplink). Either VLAN may be the port's untagged/PVID VLAN — the default profile matches an **audio trunk** port (untagged Dante, tagged Control)
 - Control clients share the amp/console VLAN; **SNATs** unicast Control→Dante so Dante/Lake/Shure devices see an on-subnet peer
 - **Reflects allowlisted multicast** discovery/control **Control↔Dante** (Dante, Shure, Lake after capture)
 - **Drops** PTP / multicast media toward Control; does not trunk SoundGrid
@@ -28,7 +28,8 @@ A portable Linux gateway so one control client (laptop or tablet) on the **Marti
 | [`docs/break-glass.md`](docs/break-glass.md) | Combiner down |
 | [`docs/pi-prep.md`](docs/pi-prep.md) | Building binaries, Go, virgil01 lab board |
 | [`docs/productization.md`](docs/productization.md) | Future hardware (PoE, Sipeed) |
-| [`config/site.example.yaml`](config/site.example.yaml) | Production-shaped Control + Dante example |
+| [`config/site.example.yaml`](config/site.example.yaml) | **Default** — audio trunk: untagged Dante (PVID), tagged Control |
+| [`config/site.tagged-trunk.example.yaml`](config/site.tagged-trunk.example.yaml) | Fully tagged trunk (no untagged VLAN on the port) |
 | [`config/site.lab-flat.example.yaml`](config/site.lab-flat.example.yaml) | Lab: optional untagged Mgmt on a flat LAN |
 | [`deploy/pi/README.md`](deploy/pi/README.md) | Installer internals and troubleshooting |
 | [`cmd/combiner/`](cmd/combiner/) | Reflector + status HTTP service |
@@ -69,11 +70,21 @@ make check
 
 Once running, open `http://<control-ip>:8080/`. The combiner does not serve Control DHCP ([`docs/setup.md`](docs/setup.md)).
 
-Validate config without starting:
+## Validate config before restarting
+
+`combiner -check` is the preflight. It loads `site.yaml` (rejecting unknown keys), cross-checks allowlists against the deny floor, and reports the interfaces, management access, and reflector memberships the service would use:
 
 ```bash
-./bin/combiner -check -config config/site.example.yaml
+combiner -check -config /etc/combiner/site.yaml
 ```
+
+Exit is non-zero on any config or allowlist error, so it is safe to gate a restart on it:
+
+```bash
+combiner -check -config /etc/combiner/site.yaml && sudo systemctl restart combiner
+```
+
+Interfaces that do not exist yet are reported as a **warning**, not a failure — the same command is meant to run on a laptop, where the VLAN devices legitimately are not there. `install.sh` runs this check before it changes anything.
 
 ## License
 

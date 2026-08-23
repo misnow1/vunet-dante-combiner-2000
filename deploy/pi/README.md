@@ -9,7 +9,7 @@ Installs VLAN interfaces, optional lab Mgmt DHCP (`dnsmasq`), fail-closed `nftab
 - Raspberry Pi with GbE (Pi 4/5 recommended; Pi 3 OK for early lab)
 - Switch trunk and DHCP already set per **[`docs/setup.md`](../../docs/setup.md)**
 - **Local console** (serial/HDMI) recommended — install disables NetworkManager/dhcpcd
-- Edited `/etc/combiner/site.yaml` (start from `config/site.example.yaml`)
+- Edited `/etc/combiner/site.yaml` (start from `config/site.example.yaml` — audio trunk; or `site.tagged-trunk.example.yaml` / `site.lab-flat.example.yaml`)
 
 ### Combiner DHCP (off by default)
 
@@ -20,9 +20,29 @@ mgmt_dhcp:
   enabled: false
 ```
 
-### Untagged Mgmt (native VLAN / flat lab LAN)
+### Untagged VLANs (native / PVID)
 
-Lab boards on an access/native port (e.g. `virgil01` on `192.168.1.x`) use [`config/site.lab-flat.example.yaml`](../../config/site.lab-flat.example.yaml). That Mgmt face is a **Pi uplink**, not the client network. Production clients live on Control.
+Any **one** VLAN may be untagged, because a switch port has exactly one PVID. Its L3 lands on `physical_interface` and no `.netdev` is written for it; every other VLAN stays an 802.1Q subinterface. The generators reject a second `untagged: true` with `only one VLAN may be untagged (a port has one PVID)`.
+
+**Audio trunk (default)** — PVID/untagged Dante, tagged Control, from [`config/site.example.yaml`](../../config/site.example.yaml):
+
+```yaml
+vlans:
+  control:
+    id: 200
+    address: 10.200.0.1
+    prefix: 21
+    interface_name: eth0.200   # tagged
+  dante:
+    id: 201                    # documents the PVID; no eth0.201 is created
+    address: 10.201.0.1
+    prefix: 21
+    untagged: true             # L3 lands on eth0
+```
+
+Result: `10-combiner-trunk.network` carries `Address=10.201.0.1/21` plus `VLAN=eth0.200`, and only `20-combiner-control.netdev` is written.
+
+**Untagged Mgmt (flat lab LAN)** — lab boards on an access/native port (e.g. `virgil01` on `192.168.1.x`) use [`config/site.lab-flat.example.yaml`](../../config/site.lab-flat.example.yaml). That Mgmt face is a **Pi uplink**, not the client network. Production clients live on Control.
 
 ```yaml
 vlans:
@@ -55,7 +75,7 @@ tar -xzf combiner.tgz
 cd vunet-dante-combiner-VERSION-linux-arm64
 
 sudo mkdir -p /etc/combiner
-sudo cp config/site.example.yaml /etc/combiner/site.yaml   # or site.lab-flat.example.yaml
+sudo cp config/site.example.yaml /etc/combiner/site.yaml   # or site.tagged-trunk / site.lab-flat
 # edit /etc/combiner/site.yaml
 sudo ./deploy/pi/install.sh /etc/combiner/site.yaml --i-have-console
 ```
@@ -66,7 +86,7 @@ sudo ./deploy/pi/install.sh /etc/combiner/site.yaml --i-have-console
 
 ```bash
 sudo mkdir -p /etc/combiner
-sudo cp config/site.example.yaml /etc/combiner/site.yaml   # or site.lab-flat.example.yaml
+sudo cp config/site.example.yaml /etc/combiner/site.yaml   # or site.tagged-trunk / site.lab-flat
 sudo cp -r config/allowlists /etc/combiner/
 # edit /etc/combiner/site.yaml
 # ensure bin/combiner and bin/combiner-status exist (release package, make build-pi, or go on PATH)
@@ -77,14 +97,15 @@ Without `--i-have-console`, the script refuses to run over SSH (it would lock yo
 
 ### What the installer does (order matters)
 
-1. Leaves **IP forwarding off**
-2. Generates nftables and runs **`nft -c -f`** (abort if invalid)
-3. Loads a bootstrap **forward drop** ruleset, then the real ruleset
-4. Flushes conntrack
-5. Configures VLANs / dnsmasq / combiner
-6. **Waits for every interface named in `site.yaml` to exist** — aborts with diagnostics if not
-7. **Enables IP forwarding last**
-8. Confirms `combiner` is still active a few seconds after start
+1. Resolves `bin/combiner` and `bin/combiner-status` **before touching anything** — rebuilding them when a source checkout has Go files newer than the binary, and aborting with `nothing has been changed on this system` if they are missing and Go is unavailable
+2. Runs `combiner -check` on `site.yaml` as an authoritative preflight, and leaves **IP forwarding off**
+3. Generates nftables and runs **`nft -c -f`** (abort if invalid)
+4. Loads a bootstrap **forward drop** ruleset, then the real ruleset
+5. Flushes conntrack
+6. Configures VLANs / dnsmasq / combiner
+7. **Waits for every interface named in `site.yaml` to exist** — aborts with diagnostics if not
+8. **Enables IP forwarding last**
+9. Confirms `combiner` is still active a few seconds after start
 
 Avahi is disabled/masked so it does not fight the reflector on UDP 5353. The install aborts if `NetworkManager` or `dhcpcd` survive the disable step, since either one silently prevents `systemd-networkd` from creating VLANs.
 
@@ -118,6 +139,21 @@ systemctl status combiner --no-pager
 journalctl -u combiner -b --no-pager | tail -40
 combiner -check -config /etc/combiner/site.yaml
 ```
+
+`-check` prints the interfaces, VLAN tagging, management access, and reflector memberships the service would use, and exits non-zero on a config or allowlist error. Missing interfaces are a warning, not an error, and are the usual reason the service will not stay up.
+
+**Preflight rejects a config that should be valid**
+
+```
+config: dante: untagged is only allowed on mgmt
+site.yaml failed validation — aborting before any change
+```
+
+A rule that no longer exists means the preflight ran a **stale `bin/combiner`** — an older binary validating a newer `site.yaml`. The installer now rebuilds automatically when Go is present and the checkout's `.go` files are newer than the binary; without Go it warns and tells you the rejection may be bogus. Fix by rebuilding (`make build`, or `make build-pi` and copy) or by installing from a release tarball, where the binary and generators are always built together.
+
+**`site.yaml` key was ignored**
+
+It is not. Both the Go loader and the deploy generators reject unrecognized keys and name the offending line, so a typo like `untaged` fails loudly rather than silently selecting the wrong tagging. The Go struct tags in `internal/config` are the authoritative key list; `deploy/pi/site_config.py` mirrors them for the generators.
 
 The service exits when a configured interface is absent, so fix the interfaces first. `status=226/NAMESPACE` instead means a sandbox path in the unit does not exist — the unit reads dnsmasq leases but never writes them, so it declares no `ReadWritePaths` (`ProtectSystem=strict` already leaves the filesystem readable).
 

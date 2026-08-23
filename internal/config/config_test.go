@@ -211,16 +211,62 @@ deny_multicast_prefixes: [224.0.1.128/30, 224.0.1.132/32, 239.255.0.0/16]
 	}
 }
 
-func TestRejectUntaggedControl(t *testing.T) {
+func TestUntaggedAllowedOnAnyRole(t *testing.T) {
+	for _, role := range []string{"mgmt", "control", "dante"} {
+		t.Run(role, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "site.yaml")
+			v := map[string]string{
+				"mgmt":    "{id: 10, address: 10.10.0.1, prefix: 24}",
+				"control": "{id: 20, address: 10.20.0.1, prefix: 24}",
+				"dante":   "{id: 30, address: 10.30.0.1, prefix: 24}",
+			}
+			v[role] = strings.TrimSuffix(v[role], "}") + ", untagged: true}"
+			content := `
+hostname: x
+physical_interface: eth0
+vlans:
+  mgmt: ` + v["mgmt"] + `
+  control: ` + v["control"] + `
+  dante: ` + v["dante"] + `
+mgmt_dhcp: {enabled: false}
+allowlist_files: []
+deny_multicast_prefixes: [224.0.1.128/30, 224.0.1.132/32, 239.255.0.0/16]
+`
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			site, err := config.LoadSite(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := map[string]string{
+				"mgmt":    site.MgmtIface(),
+				"control": site.VLANs.Control.Iface("eth0"),
+				"dante":   site.VLANs.Dante.Iface("eth0"),
+			}
+			if got[role] != "eth0" {
+				t.Fatalf("untagged %s iface = %s, want eth0", role, got[role])
+			}
+			for other, name := range got {
+				if other != role && name == "eth0" {
+					t.Fatalf("tagged %s should not be on eth0", other)
+				}
+			}
+		})
+	}
+}
+
+// A switch port has exactly one PVID.
+func TestRejectTwoUntaggedVLANs(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "site.yaml")
 	content := `
 hostname: x
 physical_interface: eth0
 vlans:
-  mgmt: {id: 10, address: 10.10.0.1, prefix: 24}
   control: {id: 20, address: 10.20.0.1, prefix: 24, untagged: true}
-  dante: {id: 30, address: 10.30.0.1, prefix: 24}
+  dante: {id: 30, address: 10.30.0.1, prefix: 24, untagged: true}
 mgmt_dhcp: {enabled: false}
 allowlist_files: []
 deny_multicast_prefixes: [224.0.1.128/30, 224.0.1.132/32, 239.255.0.0/16]
@@ -228,8 +274,12 @@ deny_multicast_prefixes: [224.0.1.128/30, 224.0.1.132/32, 239.255.0.0/16]
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := config.LoadSite(path); err == nil {
-		t.Fatal("expected untagged control error")
+	_, err := config.LoadSite(path)
+	if err == nil {
+		t.Fatal("expected one-PVID error")
+	}
+	if !strings.Contains(err.Error(), "one PVID") {
+		t.Fatalf("error %v", err)
 	}
 }
 
@@ -512,5 +562,225 @@ deny_multicast_prefixes:
 	}
 	if len(site.DenyPrefixes) != 1 {
 		t.Fatalf("want 1 deny prefix after dedupe, got %v", site.DenyPrefixes)
+	}
+}
+
+// The default example is an "audio trunk" port: Dante on the PVID (untagged),
+// Control tagged. Everything downstream keys off interface names.
+func TestExampleSiteAudioTrunk(t *testing.T) {
+	site, err := config.LoadSite(filepath.Join("..", "..", "config", "site.example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := site.VLANs.Dante.Iface(site.PhysicalInterface); got != "eth0" {
+		t.Fatalf("dante iface %s, want eth0 (untagged/PVID)", got)
+	}
+	if got := site.ClientIface(); got != "eth0.200" {
+		t.Fatalf("control iface %s, want eth0.200", got)
+	}
+	if site.HasMgmt() {
+		t.Fatal("audio-trunk example should not configure mgmt")
+	}
+	peer, err := site.PeerIface("dante")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if peer == site.ClientIface() {
+		t.Fatal("dante peer iface must differ from control iface")
+	}
+}
+
+func TestTaggedTrunkExample(t *testing.T) {
+	site, err := config.LoadSite(filepath.Join("..", "..", "config", "site.tagged-trunk.example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := site.VLANs.Dante.Iface(site.PhysicalInterface); got != "eth0.201" {
+		t.Fatalf("dante iface %s, want eth0.201 (tagged)", got)
+	}
+	if got := site.ClientIface(); got != "eth0.200" {
+		t.Fatalf("control iface %s, want eth0.200", got)
+	}
+}
+
+func TestManagementAccessDefaults(t *testing.T) {
+	site, err := config.LoadSite(filepath.Join("..", "..", "config", "site.example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := site.ManagementRoles(); len(got) != 1 || got[0] != "control" {
+		t.Fatalf("roles %v, want [control]", got)
+	}
+	if got := site.ManagementIfaces(); len(got) != 1 || got[0] != "eth0.200" {
+		t.Fatalf("ifaces %v, want [eth0.200]", got)
+	}
+
+	lab, err := config.LoadSite(filepath.Join("..", "..", "config", "site.lab-flat.example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Omitted management_access keeps the historical control+mgmt behavior.
+	if got := lab.ManagementIfaces(); len(got) != 2 || got[0] != "eth0.200" || got[1] != "eth0" {
+		t.Fatalf("lab ifaces %v, want [eth0.200 eth0]", got)
+	}
+}
+
+func TestManagementAccessExplicit(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "site.yaml")
+	content := `
+hostname: x
+physical_interface: eth0
+management_access: [Control, DANTE]
+vlans:
+  control: {id: 200, address: 10.200.0.1, prefix: 21}
+  dante: {id: 201, address: 10.201.0.1, prefix: 21, untagged: true}
+mgmt_dhcp: {enabled: false}
+allowlist_files: []
+deny_multicast_prefixes: [224.0.1.128/30, 224.0.1.132/32, 239.255.0.0/16]
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	site, err := config.LoadSite(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := site.ManagementIfaces()
+	if len(got) != 2 || got[0] != "eth0.200" || got[1] != "eth0" {
+		t.Fatalf("ifaces %v, want [eth0.200 eth0]", got)
+	}
+}
+
+func TestManagementAccessRejects(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{"unknown role", "[control, soundgrid]", "unknown role"},
+		{"duplicate", "[control, control]", "duplicate role"},
+		{"mgmt absent", "[mgmt]", "vlans.mgmt is not configured"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "site.yaml")
+			content := `
+hostname: x
+physical_interface: eth0
+management_access: ` + tc.value + `
+vlans:
+  control: {id: 200, address: 10.200.0.1, prefix: 21}
+  dante: {id: 201, address: 10.201.0.1, prefix: 21, untagged: true}
+mgmt_dhcp: {enabled: false}
+allowlist_files: []
+deny_multicast_prefixes: [224.0.1.128/30, 224.0.1.132/32, 239.255.0.0/16]
+`
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := config.LoadSite(path)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// A misspelled key must fail loudly: `untaged: true` would otherwise produce a
+// valid-looking config with the wrong tagging, and the service would come up
+// on interfaces the switch port does not carry.
+func TestRejectUnknownKeys(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+		want string
+	}{
+		{
+			name: "top level",
+			yaml: "totally_bogus_key: yes\n",
+			want: "totally_bogus_key",
+		},
+		{
+			name: "near miss on management_access",
+			yaml: "managment_access: [control]\n",
+			want: "managment_access",
+		},
+	}
+	base := `
+hostname: x
+physical_interface: eth0
+vlans:
+  control: {id: 200, address: 10.200.0.1, prefix: 21}
+  dante: {id: 201, address: 10.201.0.1, prefix: 21, untagged: true}
+mgmt_dhcp: {enabled: false}
+allowlist_files: []
+deny_multicast_prefixes: [224.0.1.128/30]
+`
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "site.yaml")
+			if err := os.WriteFile(path, []byte(base+tc.yaml), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := config.LoadSite(path)
+			if err == nil {
+				t.Fatal("expected unknown-key error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error %v, want mention of %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestRejectUnknownVLANKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "site.yaml")
+	content := `
+hostname: x
+physical_interface: eth0
+vlans:
+  control: {id: 200, address: 10.200.0.1, prefix: 21}
+  dante: {id: 201, address: 10.201.0.1, prefix: 21, untaged: true}
+mgmt_dhcp: {enabled: false}
+allowlist_files: []
+deny_multicast_prefixes: [224.0.1.128/30]
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := config.LoadSite(path)
+	if err == nil {
+		t.Fatal("expected error for misspelled untagged")
+	}
+	if !strings.Contains(err.Error(), "untaged") {
+		t.Fatalf("error %v", err)
+	}
+}
+
+func TestRejectUnknownAllowlistKey(t *testing.T) {
+	dir := t.TempDir()
+	// `adress` instead of `address` would otherwise leave the group with no
+	// endpoints and silently reflect nothing.
+	sitePath := writeSiteWithAllowlist(t, dir, `
+name: bad
+vlan: dante
+groups:
+  - name: g
+    adress: 224.0.0.251
+    port: 5353
+`)
+	_, err := config.LoadSite(sitePath)
+	if err == nil {
+		t.Fatal("expected error for misspelled allowlist key")
+	}
+	if !strings.Contains(err.Error(), "adress") {
+		t.Fatalf("error %v", err)
 	}
 }

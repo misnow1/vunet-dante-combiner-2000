@@ -1,4 +1,4 @@
-.PHONY: build build-pi build-pi-arm build-linux-amd64 package test test-py lint-py fmt fmt-check generate-check check
+.PHONY: build build-pi build-pi-arm build-linux-amd64 package test test-py lint-py fmt fmt-check generate-check nft-check check
 
 # Strip leading v from VERSION (e.g. v0.1.0 → 0.1.0). Override: make package VERSION=0.1.0
 VERSION ?= $(shell v=$$(git describe --tags --exact-match 2>/dev/null) || v=$$(git describe --tags --always 2>/dev/null) || v=dev; echo $${v#v})
@@ -40,12 +40,14 @@ package: build-pi build-pi-arm build-linux-amd64
 		cp "bin/combiner-linux-$$arch" "$$stage/bin/combiner"; \
 		cp "bin/combiner-status-linux-$$arch" "$$stage/bin/combiner-status"; \
 		chmod 755 "$$stage/bin/combiner" "$$stage/bin/combiner-status"; \
-		cp config/site.example.yaml config/site.lab-flat.example.yaml "$$stage/config/"; \
+		cp config/site.example.yaml config/site.tagged-trunk.example.yaml \
+			config/site.lab-flat.example.yaml "$$stage/config/"; \
 		cp -a config/allowlists "$$stage/config/"; \
 		cp deploy/pi/install.sh \
 			deploy/pi/generate-nftables.py \
 			deploy/pi/generate-nftables.sh \
 			deploy/pi/generate-network-config.py \
+			deploy/pi/site_config.py \
 			deploy/pi/README.md \
 			"$$stage/deploy/pi/"; \
 		cp -a deploy/pi/systemd "$$stage/deploy/pi/"; \
@@ -77,10 +79,36 @@ fmt:
 fmt-check:
 	@test -z "$$(gofmt -l .)" || (echo "gofmt needed:" && gofmt -l . && exit 1)
 
+# Render every shipped profile: audio trunk (default), fully tagged, flat lab.
 generate-check:
-	python3 deploy/pi/generate-nftables.py config/site.example.yaml /tmp/combiner-nftables.conf
-	python3 deploy/pi/generate-network-config.py config/site.example.yaml /tmp/combiner-net
-	@command -v nft >/dev/null && nft -c -f /tmp/combiner-nftables.conf || echo "nft not installed — skipped nft -c"
-	@echo "ok: generated /tmp/combiner-nftables.conf and /tmp/combiner-net"
+	@for profile in site.example site.tagged-trunk.example site.lab-flat.example; do \
+		echo "generating $$profile"; \
+		python3 deploy/pi/generate-nftables.py config/$$profile.yaml /tmp/combiner-nftables-$$profile.conf || exit 1; \
+		python3 deploy/pi/generate-network-config.py config/$$profile.yaml /tmp/combiner-net-$$profile >/dev/null || exit 1; \
+	done
+	@$(MAKE) --no-print-directory nft-check
+	@echo "ok: generated /tmp/combiner-nftables-*.conf and /tmp/combiner-net-*"
+
+# `nft -c` parses against the live kernel, so it needs privileges even in check
+# mode. Skip loudly when we cannot get them — never report a real nft failure
+# as "not installed".
+nft-check:
+	@ls /tmp/combiner-nftables-*.conf >/dev/null 2>&1 || \
+		{ echo "no generated rulesets in /tmp — run 'make generate-check' first" >&2; exit 1; }
+	@if ! command -v nft >/dev/null 2>&1; then \
+		echo "nft not installed — skipped nft -c"; \
+	elif [ "$$(id -u)" = "0" ]; then \
+		for f in /tmp/combiner-nftables-*.conf; do \
+			nft -c -f "$$f" || { echo "nft -c FAILED: $$f" >&2; exit 1; }; \
+		done; \
+		echo "nft -c OK (root)"; \
+	elif sudo -n true >/dev/null 2>&1; then \
+		for f in /tmp/combiner-nftables-*.conf; do \
+			sudo -n nft -c -f "$$f" || { echo "nft -c FAILED: $$f" >&2; exit 1; }; \
+		done; \
+		echo "nft -c OK (sudo)"; \
+	else \
+		echo "nft present but needs root — skipped nft -c (run: sudo make nft-check)"; \
+	fi
 
 check: fmt-check test test-py lint-py generate-check build build-pi build-pi-arm build-linux-amd64

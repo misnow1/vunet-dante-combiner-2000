@@ -1,5 +1,13 @@
-# Example site config — production-shaped addressing (Control + Dante).
-# Copy to /etc/combiner/site.yaml and set real 802.1Q VLAN IDs.
+# Example site config — "audio trunk" port (the default deployment shape).
+#
+# Switch port: PVID/untagged Dante (201), tagged Martin Control (200). Drop the
+# combiner on any audio trunk port and Control clients reach Dante gear.
+#
+#   eth0      untagged  -> Dante   (PVID 201)
+#   eth0.200  tagged    -> Control
+#
+# Other tagged VLANs on that port are ignored: no netdev is created for them, so
+# the kernel drops those frames. Never add a SoundGrid VLAN here.
 #
 # Clients (WAP / laptops / iPads) live on Martin Control with the amps.
 # Combiner DHCP is off; core Control DHCP option 3 must be this Control
@@ -8,30 +16,43 @@
 # Audio nets use /21 (255.255.248.0). If switch SVIs already own .1 on
 # Control/Dante, change combiner addresses.
 #
-# Optional lab Mgmt VLAN: see site.lab-flat.example.yaml (Pi uplink).
-# Never add a SoundGrid VLAN here.
+# Both VLANs tagged instead: config/site.tagged-trunk.example.yaml
+# Flat lab LAN with an untagged Mgmt uplink: config/site.lab-flat.example.yaml
 
 hostname: combiner
 physical_interface: eth0
 status_listen: ":8080"
 
 vlans:
-  # Martin Control — VuNET, mixer-control, MixPad, control clients
+  # Martin Control — VuNET, mixer-control, MixPad, control clients. Tagged.
   control:
     id: 200
     address: 10.200.0.1
     prefix: 21
     interface_name: eth0.200
-  # Dante Primary — Lake / Dante / Shure WWB
+  # Dante Primary — Lake / Dante / Shure WWB. Untagged (the port's PVID), so
+  # its L3 lands on eth0 and no eth0.201 netdev is created. Keep id set: it
+  # documents the PVID and is still checked for uniqueness.
   dante:
     id: 201
     address: 10.201.0.1
     prefix: 21
-    interface_name: eth0.201
+    untagged: true
 
 # Combiner does not run DHCP on Control or Dante (core switch / existing pools).
 mgmt_dhcp:
   enabled: false
+
+# Which VLANs may reach SSH (22) and the status page (8080).
+# Omitted => control (plus mgmt when one is configured) — the default posture.
+#
+# On a real audio trunk Control is tagged and present, so the default is enough.
+# If the combiner may land on a plain PVID-201 access port with no tagged 200,
+# uncomment this to keep a way in; otherwise recovery is console-only (ICMP echo
+# still answers on every interface). Widening this exposes SSH and the status
+# page to the whole Dante VLAN.
+#
+# management_access: [control, dante]
 
 # Paths relative to the config file directory, or absolute.
 allowlist_files:

@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Generate nftables.conf from combiner site.yaml.
 
+Any one VLAN may be untagged (native/PVID) — on an "audio trunk" port that is
+dante. Rules key on interface names, so tagging does not change the data plane.
+
 Safety invariants:
 - forward policy drop
 - unicast Control→Dante (client-initiated) + SNAT to combiner Dante IP
@@ -20,21 +23,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-try:
-    import yaml
-except ImportError:
-    print("PyYAML required: pip install pyyaml / apt install python3-yaml", file=sys.stderr)
-    sys.exit(1)
+from site_config import load_site
 
 IFACE_RE = re.compile(r"^[A-Za-z0-9._-]{1,15}$")
-
-
-def load_site(path: Path) -> dict[str, Any]:
-    with path.open() as f:
-        data = yaml.safe_load(f)
-    if not isinstance(data, dict):
-        raise SystemExit(f"site config must be a mapping: {path}")
-    return data
 
 
 def iface(vlan: dict[str, Any], phys: str) -> str:
@@ -82,10 +73,32 @@ def validate_ipv4(addr: str, label: str) -> None:
 
 
 def nft_set(names: list[str]) -> str:
-    quoted = ", ".join(f'"{n}"' for n in names)
-    if len(names) == 1:
-        return f"{{ {quoted} }}"
-    return f"{{ {quoted} }}"
+    return "{ " + ", ".join(f'"{n}"' for n in names) + " }"
+
+
+def management_ifaces(site: dict[str, Any], role_ifaces: dict[str, str], has_mgmt: bool) -> list[str]:
+    """Interfaces allowed to reach SSH/status (22, 8080).
+
+    Omitted management_access defaults to control, plus mgmt when configured —
+    the historical behavior. An explicit list is authoritative: naming
+    [control, dante] on a box that also has mgmt drops SSH via mgmt.
+    """
+    raw = site.get("management_access")
+    if raw is None:
+        roles = ["control"] + (["mgmt"] if has_mgmt else [])
+    elif isinstance(raw, list):
+        roles = [str(r).strip().lower() for r in raw] or (["control"] + (["mgmt"] if has_mgmt else []))
+    else:
+        raise SystemExit("management_access must be a list")
+    out: list[str] = []
+    for role in roles:
+        if role not in role_ifaces:
+            raise SystemExit(f"management_access: unknown or unconfigured role {role!r} (want control|dante|mgmt)")
+        if role_ifaces[role] not in out:
+            out.append(role_ifaces[role])
+    if not out:
+        raise SystemExit("management_access resolved to no interfaces")
+    return out
 
 
 def main() -> int:
@@ -109,10 +122,14 @@ def main() -> int:
 
     validate_ipv4(control["address"], "control.address")
     validate_ipv4(dante["address"], "dante.address")
-    if control.get("untagged"):
-        raise SystemExit("control: untagged is only allowed on mgmt")
-    if dante.get("untagged"):
-        raise SystemExit("dante: untagged is only allowed on mgmt")
+    # A switch port has exactly one PVID, so at most one VLAN may be native.
+    untagged_roles = [
+        role
+        for role, v in (("mgmt", mgmt if has_mgmt else None), ("control", control), ("dante", dante))
+        if isinstance(v, dict) and v.get("untagged")
+    ]
+    if len(untagged_roles) > 1:
+        raise SystemExit(f"only one VLAN may be untagged (a port has one PVID): {', '.join(untagged_roles)}")
 
     i_control = iface(control, phys)
     i_dante = iface(dante, phys)
@@ -134,6 +151,11 @@ def main() -> int:
         raise SystemExit("VLAN interface names must be distinct")
     if len(set(ids)) != len(ids):
         raise SystemExit("VLAN IDs must be distinct")
+
+    role_ifaces = {"control": i_control, "dante": i_dante}
+    if has_mgmt:
+        role_ifaces["mgmt"] = i_mgmt
+    mgmt_access_ifs = nft_set(management_ifaces(site, role_ifaces, has_mgmt))
 
     deny_prefixes = deny_prefixes_from_site(site)
     all_if_names = [i_control, i_dante] + ([i_mgmt] if has_mgmt else [])
@@ -170,7 +192,6 @@ def main() -> int:
     if has_mgmt:
         mgmt_input = f"""
     iifname "{i_mgmt}" udp dport {{ 67, 68 }} accept
-    iifname "{i_mgmt}" tcp dport {{ 22, 8080 }} accept
     iifname "{i_mgmt}" icmp type echo-request accept
 """
 
@@ -238,8 +259,8 @@ table inet combiner {{
 
     ct state established,related accept
 
-    # Status / SSH / ICMP on Control (clients live here)
-    iifname "{i_control}" tcp dport {{ 22, 8080 }} accept
+    # Status / SSH on the management_access roles (default: Control, plus Mgmt)
+    iifname {mgmt_access_ifs} tcp dport {{ 22, 8080 }} accept
     iifname "{i_control}" icmp type echo-request accept
 {mgmt_input}
     # IGMP + UDP multicast for the reflector (after denies)

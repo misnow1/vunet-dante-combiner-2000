@@ -189,7 +189,7 @@ Or rsync/scp from your laptop. Then either build on-device or drop prebuilt bina
 
 ## Minimal lab config (no production trunk yet)
 
-For first smoke tests on a single LAN (`virgil01` at `192.168.1.2`), use [`config/site.lab-flat.example.yaml`](../config/site.lab-flat.example.yaml) (optional untagged Mgmt). Production Control+Dante is [`config/site.example.yaml`](../config/site.example.yaml). Until the switch is ready:
+For first smoke tests on a single LAN (`virgil01` at `192.168.1.2`), use [`config/site.lab-flat.example.yaml`](../config/site.lab-flat.example.yaml) (optional untagged Mgmt). Production is [`config/site.example.yaml`](../config/site.example.yaml) (audio trunk: untagged Dante, tagged Control) or [`config/site.tagged-trunk.example.yaml`](../config/site.tagged-trunk.example.yaml) if the port has no untagged VLAN. Until the switch is ready:
 
 1. Use a release tree or cross-compiled binaries and run `./bin/combiner -check -config config/site.example.yaml`
 2. Generate nftables only: `python3 deploy/pi/generate-nftables.py config/site.example.yaml /tmp/nft.conf && sudo nft -c -f /tmp/nft.conf`

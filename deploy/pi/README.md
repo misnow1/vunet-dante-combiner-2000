@@ -4,6 +4,9 @@ What `install.sh` does and how to recover when it fails. **Addresses, switch por
 
 Installs VLAN interfaces, optional lab Mgmt DHCP (`dnsmasq`), fail-closed `nftables`, and the `combiner` service on Debian / Raspberry Pi OS.
 
+`install.sh` is also what a self-provisioning card runs on first boot — see
+[`docs/sd-image.md`](../../docs/sd-image.md) and `cloud-init/` in this directory.
+
 ## Order of operations
 
 Everything that can reject the install happens **before** anything on the box

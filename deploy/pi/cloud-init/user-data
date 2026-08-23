@@ -1,0 +1,61 @@
+#cloud-config
+#
+# Combiner first-boot provisioning for Raspberry Pi OS (Trixie or newer).
+#
+# Copy this file to the FAT boot partition of a freshly flashed card, replacing
+# the user-data that Raspberry Pi Imager wrote. It must sit next to:
+#
+#   combiner-firstboot.sh    the provisioning script this file runs
+#   combiner-site.yaml       your site config (from config/site.example.yaml)
+#
+# On macOS/Linux, deploy/pi/prep-card.sh does all of that and validates the
+# config first. Full instructions: docs/sd-image.md
+#
+# The first boot needs Internet UNLESS you also stage a release tarball on the
+# boot partition (prep-card.sh does by default). After that the unit never
+# needs a network again.
+
+# ============================ EDIT THIS BLOCK ============================
+# Replacing Imager's user-data also replaces the login it configured, so the
+# account has to be defined here. Leaving the placeholder below gives you a
+# console-only box: provisioning still succeeds, but nothing can SSH in.
+
+hostname: combiner
+
+users:
+  - name: combiner
+    shell: /bin/bash
+    groups: [adm, sudo, dialout, plugdev, netdev]
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+      - REPLACE_WITH_YOUR_SSH_PUBLIC_KEY
+
+# Prefer keys. To use a password instead, set lock_passwd: false above, add a
+# hash from `openssl passwd -6` as `passwd:`, and flip ssh_pwauth to true:
+ssh_pwauth: false
+
+# Console keyboard/locale. Harmless to leave as-is on a headless unit.
+# keyboard:
+#   layout: us
+# locale: en_US.UTF-8
+# timezone: America/New_York
+
+# ========================== END OF EDIT BLOCK ===========================
+
+preserve_hostname: false
+
+# Installed while the bench network is still up. install.sh probes for these
+# and skips apt entirely when they are already present, so the provisioning
+# run below does not need a mirror.
+package_update: true
+packages:
+  - nftables
+  - python3-yaml
+  - iproute2
+  - conntrack
+
+runcmd:
+  - [bash, /boot/firmware/combiner-firstboot.sh]
+
+final_message: "combiner first boot finished after $UPTIME seconds — see combiner-firstboot.log on the boot partition"

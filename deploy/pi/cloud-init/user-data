@@ -28,11 +28,19 @@ users:
     groups: [adm, sudo, dialout, plugdev, netdev]
     sudo: "ALL=(ALL) NOPASSWD:ALL"
     lock_passwd: true
+    # passwd: REPLACE_WITH_PASSWORD_HASH
     ssh_authorized_keys:
       - REPLACE_WITH_YOUR_SSH_PUBLIC_KEY
 
-# Prefer keys. To use a password instead, set lock_passwd: false above, add a
-# hash from `openssl passwd -6` as `passwd:`, and flip ssh_pwauth to true:
+# Break-glass password, for a laptop that has no SSH key on it. prep-card.sh
+# --ask-password sets all three of these for you. By hand: uncomment the passwd
+# line above and paste a hash from `openssl passwd -6` (NOT the password
+# itself), set lock_passwd to false, and set ssh_pwauth to true here.
+#
+# The hash lands on the card's FAT partition, which anyone holding the card can
+# read, so use a password you are willing to have cracked offline and do not
+# reuse one from elsewhere. SSH stays reachable only from the VLANs named by
+# management_access in site.yaml (Control by default).
 ssh_pwauth: false
 
 # Console keyboard/locale. Harmless to leave as-is on a headless unit.

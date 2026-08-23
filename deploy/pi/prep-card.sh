@@ -16,6 +16,9 @@ CARD=""
 SITE=""
 SSH_KEY=""
 USER_DATA=""
+ASK_PASSWORD=0
+PASSWORD_FILE=""
+PASSWORD_HASH=""
 VERSION="$VERSION_DEFAULT"
 STAGE_TARBALL=1
 FORCE=0
@@ -28,6 +31,12 @@ usage: prep-card.sh --site FILE [options]
   --ssh-key FILE     public key to authorise, e.g. ~/.ssh/id_ed25519.pub
                      (substituted into the shipped user-data template)
   --user-data FILE   use your own already-edited user-data instead of --ssh-key
+
+  break-glass password (for a laptop with no SSH key on it) — pick one:
+  --ask-password     prompt for it, twice, without echoing
+  --password-file F  read it from the first line of F
+  --password-hash H  use an already-hashed password verbatim
+                     (or set COMBINER_PASSWORD in the environment)
   --card DIR         mounted boot partition (default: autodetect)
   --version V        release to stage/pin (default: the version this tree ships)
   --no-tarball       do not stage a release tarball; the Pi downloads it on
@@ -35,8 +44,9 @@ usage: prep-card.sh --site FILE [options]
   --force            skip config validation (not recommended)
   -h, --help         this text
 
-example:
+examples:
   ./deploy/pi/prep-card.sh --site my-venue.yaml --ssh-key ~/.ssh/id_ed25519.pub
+  ./deploy/pi/prep-card.sh --site my-venue.yaml --ask-password
 USAGE
 }
 
@@ -45,6 +55,9 @@ while [[ $# -gt 0 ]]; do
     --site)      SITE="${2:?--site needs a file}"; shift 2 ;;
     --ssh-key)   SSH_KEY="${2:?--ssh-key needs a file}"; shift 2 ;;
     --user-data) USER_DATA="${2:?--user-data needs a file}"; shift 2 ;;
+    --ask-password) ASK_PASSWORD=1; shift ;;
+    --password-file) PASSWORD_FILE="${2:?--password-file needs a file}"; shift 2 ;;
+    --password-hash) PASSWORD_HASH="${2:?--password-hash needs a value}"; shift 2 ;;
     --card)      CARD="${2:?--card needs a directory}"; shift 2 ;;
     --version)   VERSION="${2:?--version needs a value}"; shift 2 ;;
     --no-tarball) STAGE_TARBALL=0; shift ;;
@@ -115,32 +128,136 @@ else
 build one with 'make build', or re-run with --force to skip validation"
 fi
 
+# --- break-glass password ---------------------------------------------------
+# Optional: lets someone log in from a laptop that has no SSH key on it.
+# Never goes near argv (ps is world-readable) — everything is piped on stdin.
+# A real SHA-512 crypt hash: $6$[rounds=N$]salt$<86 chars>. macOS's crypt(3)
+# does not implement $6$ and quietly returns a short DES value instead, which
+# would install a break-glass password that cannot be used — discovered in the
+# rack, which is exactly what this feature exists to avoid. Shape-check every
+# hash before it can reach a card.
+valid_sha512_crypt() {
+  [[ "$1" =~ ^\$6\$(rounds=[0-9]+\$)?[./A-Za-z0-9]{1,16}\$[./A-Za-z0-9]{86}$ ]]
+}
+
+hash_password() {
+  local pw="$1" out="" ossl
+  # Stock macOS ships LibreSSL, whose `passwd` has no -6, so probe rather than
+  # assume; a Homebrew OpenSSL may be installed alongside it.
+  for ossl in openssl /opt/homebrew/bin/openssl \
+              /opt/homebrew/opt/openssl@3/bin/openssl \
+              /usr/local/opt/openssl@3/bin/openssl; do
+    command -v "$ossl" >/dev/null 2>&1 || continue
+    printf 'probe\n' | "$ossl" passwd -6 -stdin >/dev/null 2>&1 || continue
+    out="$(printf '%s\n' "$pw" | "$ossl" passwd -6 -stdin 2>/dev/null)" || continue
+    valid_sha512_crypt "$out" && { printf '%s\n' "$out"; return 0; }
+  done
+  # Python's crypt module was removed in 3.13 and is broken on macOS; the shape
+  # check above is what makes trying it safe.
+  if command -v python3 >/dev/null 2>&1; then
+    out="$(printf '%s\n' "$pw" | python3 -c 'import crypt, sys
+pw = sys.stdin.readline().rstrip("\n")
+print(crypt.crypt(pw, crypt.mksalt(crypt.METHOD_SHA512)))' 2>/dev/null)" || true
+    valid_sha512_crypt "$out" && { printf '%s\n' "$out"; return 0; }
+  fi
+  return 1
+}
+
+PASSWORD=""
+HAVE_PW=0
+if [[ -n "$PASSWORD_HASH" ]]; then
+  valid_sha512_crypt "$PASSWORD_HASH" ||
+    die "--password-hash is not a SHA-512 crypt hash (expected \$6\$salt\$… , 86 trailing chars).
+If you pasted the password itself, use --ask-password instead — a plaintext
+password here would be written to the card and would not work as a login."
+  HAVE_PW=1
+elif [[ "$ASK_PASSWORD" -eq 1 ]]; then
+  [[ -t 0 ]] || die "--ask-password needs a terminal — use --password-file or COMBINER_PASSWORD"
+  read -rsp "Break-glass password: " PASSWORD; echo
+  read -rsp "Confirm password:     " PASSWORD_CONFIRM; echo
+  [[ "$PASSWORD" == "$PASSWORD_CONFIRM" ]] || die "passwords did not match"
+  unset PASSWORD_CONFIRM
+  HAVE_PW=1
+elif [[ -n "$PASSWORD_FILE" ]]; then
+  [[ -f "$PASSWORD_FILE" ]] || die "no such password file: $PASSWORD_FILE"
+  # Strip CR so a file written on Windows does not smuggle one into the hash.
+  PASSWORD="$(head -n 1 "$PASSWORD_FILE" | tr -d '\r')"
+  HAVE_PW=1
+elif [[ -n "${COMBINER_PASSWORD:-}" ]]; then
+  PASSWORD="$COMBINER_PASSWORD"
+  HAVE_PW=1
+fi
+
+if [[ "$HAVE_PW" -eq 1 && -z "$PASSWORD_HASH" ]]; then
+  [[ -n "$PASSWORD" ]] || die "the password is empty"
+  # The hash sits on a FAT partition that anyone holding the card can read, so
+  # it is crackable offline. Short ones are not worth writing.
+  [[ ${#PASSWORD} -ge 8 ]] ||
+    die "password must be at least 8 characters — its hash ends up on the card's
+boot partition, where anyone holding the card can attack it offline"
+  PASSWORD_HASH="$(hash_password "$PASSWORD")" || die "no password hasher on this machine.
+Install OpenSSL 3 (brew install openssl), or hash it somewhere that can — any
+Linux box or the Pi itself — and pass the result:
+
+    openssl passwd -6
+    ./deploy/pi/prep-card.sh ... --password-hash '<the \$6\$... string>'"
+  unset PASSWORD
+fi
+
 # --- assemble user-data -----------------------------------------------------
 PLACEHOLDER="REPLACE_WITH_YOUR_SSH_PUBLIC_KEY"
+PW_PLACEHOLDER="REPLACE_WITH_PASSWORD_HASH"
 STAGED_USER_DATA="$(mktemp)"
+chmod 600 "$STAGED_USER_DATA"
 trap 'rm -rf "${STAGE:-}" "$STAGED_USER_DATA"' EXIT
 
+SRC="$CLOUD_INIT/user-data"
 if [[ -n "$USER_DATA" ]]; then
   [[ -f "$USER_DATA" ]] || die "no such user-data: $USER_DATA"
-  cp "$USER_DATA" "$STAGED_USER_DATA"
-elif [[ -n "$SSH_KEY" ]]; then
+  SRC="$USER_DATA"
+fi
+
+KEY_LINE=""
+HAVE_KEY=0
+if [[ -n "$SSH_KEY" ]]; then
   [[ -f "$SSH_KEY" ]] || die "no such key file: $SSH_KEY"
   grep -qE '^(ssh|ecdsa)-' "$SSH_KEY" ||
     die "$SSH_KEY does not look like a PUBLIC key (expected it to start with ssh-… )
 did you mean $SSH_KEY.pub?"
   KEY_LINE="$(head -n 1 "$SSH_KEY")"
-  # awk, not sed: a key is base64 and can contain '/' and '&'.
-  awk -v key="$KEY_LINE" -v ph="$PLACEHOLDER" \
-    '{ if (index($0, ph)) { sub(ph, key) } print }' \
-    "$CLOUD_INIT/user-data" >"$STAGED_USER_DATA"
-else
-  cp "$CLOUD_INIT/user-data" "$STAGED_USER_DATA"
+  HAVE_KEY=1
 fi
 
-if grep -q "$PLACEHOLDER" "$STAGED_USER_DATA"; then
-  echo "warning: user-data still contains the SSH key placeholder." >&2
-  echo "         This unit will come up console-only — nothing can SSH in." >&2
-  echo "         Pass --ssh-key FILE, or --user-data with your own file." >&2
+# awk, not sed: a public key is base64 (contains '/' and '&') and a crypt hash
+# is full of '$'. The ssh_authorized_keys header is held back so it can be
+# dropped together with its placeholder when no key was given — an unreplaced
+# placeholder would otherwise be installed as a literal, bogus key.
+awk -v key="$KEY_LINE" -v havekey="$HAVE_KEY" \
+    -v hash="$PASSWORD_HASH" -v havepw="$HAVE_PW" \
+    -v kph="$PLACEHOLDER" -v pph="$PW_PLACEHOLDER" -v q="'" '
+  /^[[:space:]]*ssh_authorized_keys:[[:space:]]*$/ { held = $0; next }
+  index($0, kph) {
+    if (havekey == "1") {
+      line = $0; sub(kph, key, line)
+      if (held != "") print held
+      print line
+    }
+    held = ""; next
+  }
+  havepw == "1" && index($0, pph)                                  { print "    passwd: " q hash q; next }
+  havepw == "1" && /^[[:space:]]*lock_passwd:[[:space:]]*true[[:space:]]*$/ { print "    lock_passwd: false"; next }
+  havepw == "1" && /^ssh_pwauth:[[:space:]]*false[[:space:]]*$/    { print "ssh_pwauth: true"; next }
+  { if (held != "") { print held; held = "" } print }
+  END { if (held != "") print held }
+' "$SRC" >"$STAGED_USER_DATA"
+
+if [[ "$HAVE_PW" -eq 1 ]]; then
+  echo "break-glass password set (SSH password auth enabled)"
+fi
+if [[ "$HAVE_KEY" -eq 0 && "$HAVE_PW" -eq 0 ]]; then
+  echo "warning: no SSH key and no password — this unit will come up with no" >&2
+  echo "         way to log in except a console. Pass --ssh-key and/or" >&2
+  echo "         --ask-password, or --user-data with your own file." >&2
 fi
 
 # --- stage the release tarball ----------------------------------------------

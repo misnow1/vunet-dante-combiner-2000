@@ -44,11 +44,44 @@ than on a dark unit in a rack.
 | --- | --- |
 | `--site FILE` | required — installed on the card as `combiner-site.yaml` |
 | `--ssh-key FILE` | public key to authorise |
+| `--ask-password` | prompt for a break-glass password, twice, without echoing |
+| `--password-file F` | read that password from the first line of `F` |
+| `--password-hash H` | use an already-hashed password (or set `COMBINER_PASSWORD`) |
 | `--user-data FILE` | use your own edited `user-data` instead of `--ssh-key` |
 | `--card DIR` | boot partition, if autodetection picks wrong |
 | `--version V` | release to stage (default: the version this tree ships) |
 | `--no-tarball` | skip staging; the Pi downloads on first boot (needs Internet) |
 | `--force` | skip config validation |
+
+### Break-glass password
+
+A laptop at a show may have no SSH key on it. Add a password login as well as
+(or instead of) a key:
+
+```bash
+./deploy/pi/prep-card.sh --site my-venue.yaml \
+  --ssh-key ~/.ssh/id_ed25519.pub --ask-password
+```
+
+It prompts twice without echoing, hashes the password with SHA-512 crypt, and
+sets `passwd`, `lock_passwd: false`, and `ssh_pwauth: true` for you. For
+unattended staging use `--password-file FILE` or the `COMBINER_PASSWORD`
+environment variable; to hash elsewhere, pass `--password-hash`.
+
+Two things worth knowing:
+
+- **The hash goes on the card's FAT partition**, which anyone holding the card
+  can read and attack offline. Use a password you have not reused, and treat a
+  spare card as a credential. Minimum length is 8.
+- **SSH stays restricted to the VLANs named by `management_access`** in
+  `site.yaml` — Control by default, not Dante. Enabling password auth does not
+  widen where SSH is answered.
+
+`prep-card.sh` refuses a hash that is not really a SHA-512 crypt string. That
+catches pasting the password itself into `--password-hash`, and it catches
+macOS's `crypt(3)`, which does not implement `$6$` and returns a short DES
+value instead — a card that would otherwise reach the rack with a break-glass
+password that does not work.
 
 ### Windows
 
@@ -57,7 +90,7 @@ Copy three files from `deploy/pi/cloud-init/` onto the card's boot partition
 
 | Copy | As | Then |
 | --- | --- | --- |
-| `user-data` | `user-data` (replacing Imager's) | edit the `EDIT THIS BLOCK` section — paste your SSH public key over `REPLACE_WITH_YOUR_SSH_PUBLIC_KEY` |
+| `user-data` | `user-data` (replacing Imager's) | edit the `EDIT THIS BLOCK` section — paste your SSH public key over `REPLACE_WITH_YOUR_SSH_PUBLIC_KEY`, and for a break-glass password follow the comment above `ssh_pwauth` |
 | `combiner-firstboot.sh` | `combiner-firstboot.sh` | — |
 | your site config | `combiner-site.yaml` | edit VLAN ids and addresses |
 

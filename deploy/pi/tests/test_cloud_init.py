@@ -87,3 +87,78 @@ def test_site_config_filename_agrees_between_script_and_prep_card() -> None:
 def test_shell_scripts_parse(script: Path) -> None:
     assert script.stat().st_mode & 0o111, f"{script.name} is not executable"
     subprocess.run(["bash", "-n", str(script)], check=True)
+
+
+def test_password_placeholder_present_for_prep_card_to_substitute() -> None:
+    """prep-card.sh rewrites this commented line into a real passwd: entry."""
+    assert "REPLACE_WITH_PASSWORD_HASH" in USER_DATA.read_text()
+    assert "REPLACE_WITH_PASSWORD_HASH" in PREP_CARD.read_text()
+
+
+def test_password_auth_is_off_by_default(user_data: dict[str, Any]) -> None:
+    """A card staged without --ask-password must not accept SSH passwords."""
+    assert user_data["ssh_pwauth"] is False
+    assert user_data["users"][0]["lock_passwd"] is True
+    assert "passwd" not in user_data["users"][0]
+
+
+def _prep_card(tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    card = tmp_path / "card"
+    card.mkdir(exist_ok=True)
+    (card / "config.txt").touch()
+    return subprocess.run(
+        [
+            str(PREP_CARD),
+            "--site",
+            str(REPO_ROOT / "config" / "site.example.yaml"),
+            "--card",
+            str(card),
+            "--no-tarball",
+            "--force",
+            *args,
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+
+# A real SHA-512 crypt hash, and the short DES value macOS's crypt(3) returns
+# instead when asked for one. Staging the latter would install a break-glass
+# password that cannot be used.
+# openssl passwd -6 -salt rtEN3GkdKSYyiLNe, for the password "testpassword".
+GOOD_HASH = "$6$rtEN3GkdKSYyiLNe$4EAcEIYikXhWb2z2CfSFL0mF0QnOxXO/GyUrevJ0RKfd250DbtEiNWTpRshdwU83.dXwORKY93gT5opm62ewq."
+MACOS_BROKEN_HASH = "$6HFnVrPgHUe6"
+
+
+def test_password_hash_is_substituted(tmp_path: Path) -> None:
+    r = _prep_card(tmp_path, "--password-hash", GOOD_HASH)
+    assert r.returncode == 0, r.stderr
+    data = yaml.safe_load((tmp_path / "card" / "user-data").read_text())
+    assert data["users"][0]["passwd"] == GOOD_HASH
+    assert data["users"][0]["lock_passwd"] is False
+    assert data["ssh_pwauth"] is True
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [MACOS_BROKEN_HASH, "BreakGlass2026!", "$6$short$tooshort", ""],
+    ids=["macos-broken-crypt", "plaintext-password", "truncated", "empty"],
+)
+def test_bad_password_hash_is_refused(tmp_path: Path, bad: str) -> None:
+    r = _prep_card(tmp_path, "--password-hash", bad)
+    assert r.returncode != 0, f"accepted {bad!r}"
+
+
+def test_short_password_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COMBINER_PASSWORD", "short")
+    r = _prep_card(tmp_path)
+    assert r.returncode != 0
+    assert "at least 8 characters" in r.stderr
+
+
+def test_no_key_drops_the_placeholder_instead_of_installing_it(tmp_path: Path) -> None:
+    """An unreplaced placeholder would become a literal, bogus authorized key."""
+    r = _prep_card(tmp_path, "--password-hash", GOOD_HASH)
+    assert r.returncode == 0, r.stderr
+    data = yaml.safe_load((tmp_path / "card" / "user-data").read_text())
+    assert "ssh_authorized_keys" not in data["users"][0]

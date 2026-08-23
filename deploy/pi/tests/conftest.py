@@ -35,9 +35,20 @@ def net_mod() -> types.ModuleType:
     return load_script("combiner_generate_network_config", "generate-network-config.py")
 
 
+@pytest.fixture(scope="session")
+def site_config_mod() -> types.ModuleType:
+    return load_script("combiner_site_config", "site_config.py")
+
+
 @pytest.fixture
 def site_example() -> Path:
+    """Default profile: audio trunk — Dante untagged (PVID), Control tagged."""
     return CONFIG_DIR / "site.example.yaml"
+
+
+@pytest.fixture
+def site_tagged_trunk() -> Path:
+    return CONFIG_DIR / "site.tagged-trunk.example.yaml"
 
 
 @pytest.fixture

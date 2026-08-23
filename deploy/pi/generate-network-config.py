@@ -4,15 +4,10 @@
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 from typing import Any
 
-try:
-    import yaml
-except ImportError:
-    print("PyYAML required", file=sys.stderr)
-    sys.exit(1)
+from site_config import load_site
 
 
 def write(path: Path, content: str) -> None:
@@ -23,11 +18,10 @@ def write(path: Path, content: str) -> None:
 
 def role_iface(role: str, v: dict[str, Any], phys: str) -> str:
     if v.get("untagged"):
-        if role != "mgmt":
-            raise SystemExit("untagged is only allowed on vlans.mgmt")
+        # The native/PVID VLAN has no netdev; its L3 lands on the physical NIC.
         name = v.get("interface_name") or phys
         if name != phys:
-            raise SystemExit(f"mgmt untagged interface_name must be {phys!r} (physical_interface), got {name!r}")
+            raise SystemExit(f"{role} untagged interface_name must be {phys!r} (physical_interface), got {name!r}")
         return phys
     name = v.get("interface_name") or f"{phys}.{v['id']}"
     if name == phys:
@@ -35,7 +29,7 @@ def role_iface(role: str, v: dict[str, Any], phys: str) -> str:
         # link as a VLAN it must create, and it stops managing it entirely.
         raise SystemExit(
             f"{role}: interface_name must differ from physical_interface {phys!r}; "
-            "use vlans.mgmt.untagged: true for a native/untagged Mgmt VLAN"
+            "set untagged: true on the native/PVID VLAN instead"
         )
     return name
 
@@ -46,10 +40,7 @@ def main() -> int:
     ap.add_argument("outdir", help="e.g. /etc or a staging directory")
     args = ap.parse_args()
 
-    data = yaml.safe_load(Path(args.site_yaml).read_text())
-    if not isinstance(data, dict):
-        raise SystemExit(f"site config must be a mapping: {args.site_yaml}")
-    site: dict[str, Any] = data
+    site: dict[str, Any] = load_site(args.site_yaml)
     out = Path(args.outdir)
     phys = site["physical_interface"]
     host = site.get("hostname", "combiner")
@@ -62,8 +53,17 @@ def main() -> int:
     if dhcp_enabled and not has_mgmt:
         raise SystemExit("mgmt_dhcp.enabled requires vlans.mgmt")
 
-    mgmt_untagged = bool(has_mgmt and mgmt.get("untagged"))
     mgmt_if = role_iface("mgmt", mgmt, phys) if has_mgmt else ""
+
+    # A switch port has exactly one PVID, so at most one VLAN may be native.
+    # On an "audio trunk" port (PVID 201) that is dante; in the flat lab it is mgmt.
+    untagged_role = ""
+    for role, v in vlans.items():
+        if not isinstance(v, dict) or not v.get("address") or not v.get("untagged"):
+            continue
+        if untagged_role:
+            raise SystemExit(f"only one VLAN may be untagged (a port has one PVID): {untagged_role} and {role}")
+        untagged_role = role
 
     # Lab uplink only: optional Mgmt that has an upstream default route.
     mgmt_extra = ""
@@ -77,7 +77,7 @@ def main() -> int:
     for role, v in vlans.items():
         if not isinstance(v, dict) or not v.get("address"):
             continue
-        if role == "mgmt" and v.get("untagged"):
+        if v.get("untagged"):
             continue
         tagged_ifaces.append(role_iface(role, v, phys))
 
@@ -86,20 +86,22 @@ def main() -> int:
     vlan_lines = "".join(f"VLAN={name}\n" for name in tagged_ifaces)
 
     # Parent / trunk device
-    if mgmt_untagged:
-        # Native/untagged Mgmt on the physical NIC; Control+Dante stay tagged.
+    if untagged_role:
+        # The native VLAN's L3 lands on the physical NIC; every other VLAN stays tagged.
+        native = vlans[untagged_role]
+        native_extra = mgmt_extra if untagged_role == "mgmt" else ""
         write(
             out / "systemd/network/10-combiner-trunk.network",
             f"""[Match]
 Name={phys}
 
 [Network]
-Description=combiner mgmt (untagged/native) + trunk parent
-Address={mgmt["address"]}/{mgmt["prefix"]}
+Description=combiner {untagged_role} (untagged/native) + trunk parent
+Address={native["address"]}/{native["prefix"]}
 {vlan_lines}LinkLocalAddressing=no
 LLMNR=no
 ConfigureWithoutCarrier=yes
-{mgmt_extra}""",
+{native_extra}""",
         )
     else:
         write(
@@ -116,7 +118,7 @@ LLMNR=no
     for role, v in vlans.items():
         if not isinstance(v, dict) or not v.get("address"):
             continue
-        if role == "mgmt" and v.get("untagged"):
+        if v.get("untagged"):
             continue  # L3 lives on the parent unit above
         ifname = role_iface(role, v, phys)
         write(

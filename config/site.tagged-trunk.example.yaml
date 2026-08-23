@@ -1,0 +1,62 @@
+# Example site config — fully tagged trunk (Control and Dante both 802.1Q).
+# Copy to /etc/combiner/site.yaml and set real 802.1Q VLAN IDs.
+#
+# Use this when the combiner port carries NO untagged VLAN. If the port has a
+# PVID (an "audio trunk" with untagged Dante), use site.example.yaml instead.
+#
+# Clients (WAP / laptops / iPads) live on Martin Control with the amps.
+# Combiner DHCP is off; core Control DHCP option 3 must be this Control
+# address. Switch ports, DHCP, and Pi install: docs/setup.md
+#
+# Audio nets use /21 (255.255.248.0). If switch SVIs already own .1 on
+# Control/Dante, change combiner addresses.
+#
+# Optional lab Mgmt VLAN: see site.lab-flat.example.yaml (Pi uplink).
+# Never add a SoundGrid VLAN here.
+
+hostname: combiner
+physical_interface: eth0
+status_listen: ":8080"
+
+vlans:
+  # Martin Control — VuNET, mixer-control, MixPad, control clients
+  control:
+    id: 200
+    address: 10.200.0.1
+    prefix: 21
+    interface_name: eth0.200
+  # Dante Primary — Lake / Dante / Shure WWB
+  dante:
+    id: 201
+    address: 10.201.0.1
+    prefix: 21
+    interface_name: eth0.201
+
+# Combiner does not run DHCP on Control or Dante (core switch / existing pools).
+mgmt_dhcp:
+  enabled: false
+
+# Paths relative to the config file directory, or absolute.
+allowlist_files:
+  - allowlists/dante.yaml
+  - allowlists/shure.yaml
+  - allowlists/lake.yaml
+
+# Hard-deny prefixes (never reflect / never forward toward Control).
+# Sole source of truth — also consumed by generate-nftables.py.
+deny_multicast_prefixes:
+  - 224.0.1.128/30          # PTP 224.0.1.128-131
+  - 224.0.1.132/32          # PTP 224.0.1.132
+  - 239.69.0.0/16           # AES67 media
+  - 239.254.3.3/32          # PTP logging
+
+# ATP (239.255.0.0/16 UDP 4321) is a hardcoded nftables/reflector floor so
+# Shure Discovery 239.255.254.253:8427 is not swallowed by a /16 prefix deny.
+
+# Documented Dante unicast control/metering ports (SNAT path).
+dante_unicast_udp_ports:
+  - 4440
+  - 4444
+  - 4455
+  - 8751
+  - 8800

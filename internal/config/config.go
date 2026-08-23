@@ -1,26 +1,31 @@
 package config
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
 type Site struct {
-	Hostname          string   `yaml:"hostname"`
-	PhysicalInterface string   `yaml:"physical_interface"`
-	StatusListen      string   `yaml:"status_listen"`
-	VLANs             VLANs    `yaml:"vlans"`
-	MgmtDHCP          MgmtDHCP `yaml:"mgmt_dhcp"`
-	AllowlistFiles    []string `yaml:"allowlist_files"`
-	DenyPrefixes      []string `yaml:"deny_multicast_prefixes"`
-	DanteUnicastUDP   []int    `yaml:"dante_unicast_udp_ports"`
-	Allowlists        []Allowlist
-	ConfigDir         string `yaml:"-"`
+	Hostname          string      `yaml:"hostname"`
+	PhysicalInterface string      `yaml:"physical_interface"`
+	StatusListen      string      `yaml:"status_listen"`
+	VLANs             VLANs       `yaml:"vlans"`
+	MgmtDHCP          MgmtDHCP    `yaml:"mgmt_dhcp"`
+	ManagementAccess  []string    `yaml:"management_access"`
+	AllowlistFiles    []string    `yaml:"allowlist_files"`
+	DenyPrefixes      []string    `yaml:"deny_multicast_prefixes"`
+	DanteUnicastUDP   []int       `yaml:"dante_unicast_udp_ports"`
+	Allowlists        []Allowlist `yaml:"-"`
+	ConfigDir         string      `yaml:"-"`
 }
 
 type VLANs struct {
@@ -34,7 +39,9 @@ type VLAN struct {
 	Address       string `yaml:"address"`
 	Prefix        int    `yaml:"prefix"`
 	InterfaceName string `yaml:"interface_name"`
-	// Untagged puts L3 on the physical NIC (native/PVID). Only allowed on mgmt.
+	// Untagged puts L3 on the physical NIC (native/PVID). At most one VLAN may
+	// be untagged: a switch port has exactly one PVID. On an "audio trunk" port
+	// that is dante (PVID 201) with control tagged.
 	Untagged bool `yaml:"untagged"`
 	// Gateway/DNS are lab conveniences for a Mgmt VLAN that has an uplink.
 	// Production Mgmt is isolated and needs neither. Only allowed on mgmt.
@@ -150,14 +157,30 @@ func (g AllowGroup) Endpoints() []Endpoint {
 	return out
 }
 
+// strictUnmarshal decodes YAML with KnownFields, so an unrecognized or
+// misspelled key is an error instead of a silently ignored one. A typo like
+// `untaged: true` would otherwise yield a valid-looking config with the wrong
+// topology — tagged where the port is native, or vice versa.
+func strictUnmarshal(data []byte, out any) error {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(out); err != nil {
+		if errors.Is(err, io.EOF) {
+			return fmt.Errorf("empty config")
+		}
+		return err
+	}
+	return nil
+}
+
 func LoadSite(path string) (*Site, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 	var s Site
-	if err := yaml.Unmarshal(data, &s); err != nil {
-		return nil, err
+	if err := strictUnmarshal(data, &s); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	s.ConfigDir = filepath.Dir(path)
 	if s.StatusListen == "" {
@@ -230,7 +253,7 @@ func loadAllowlist(path string) (*Allowlist, error) {
 		return nil, err
 	}
 	var al Allowlist
-	if err := yaml.Unmarshal(data, &al); err != nil {
+	if err := strictUnmarshal(data, &al); err != nil {
 		return nil, err
 	}
 	role := strings.ToLower(al.VLAN)
@@ -344,6 +367,7 @@ func (s *Site) validate() error {
 	}
 	ids := map[int]string{}
 	ifaces := map[string]string{}
+	untaggedRole := ""
 	var nets []*net.IPNet
 	for _, item := range vlans {
 		v := item.v
@@ -359,16 +383,20 @@ func (s *Site) validate() error {
 		if v.Address == "" {
 			return fmt.Errorf("%s: address required", item.name)
 		}
-		if v.Untagged && item.name != "mgmt" {
-			return fmt.Errorf("%s: untagged is only allowed on mgmt", item.name)
-		}
-		if v.Untagged && v.InterfaceName != "" && v.InterfaceName != s.PhysicalInterface {
-			return fmt.Errorf("mgmt: untagged interface_name must be omitted or equal physical_interface %q", s.PhysicalInterface)
+		if v.Untagged {
+			// A switch port has exactly one PVID, so only one VLAN can be native.
+			if untaggedRole != "" {
+				return fmt.Errorf("%s: untagged already set on %s (a port has one PVID)", item.name, untaggedRole)
+			}
+			untaggedRole = item.name
+			if v.InterfaceName != "" && v.InterfaceName != s.PhysicalInterface {
+				return fmt.Errorf("%s: untagged interface_name must be omitted or equal physical_interface %q", item.name, s.PhysicalInterface)
+			}
 		}
 		// A tagged VLAN named after the NIC would make networkd treat the real
 		// link as a VLAN netdev and stop managing it.
 		if !v.Untagged && v.Iface(s.PhysicalInterface) == s.PhysicalInterface {
-			return fmt.Errorf("%s: interface_name must differ from physical_interface %q (use untagged: true on mgmt for a native VLAN)", item.name, s.PhysicalInterface)
+			return fmt.Errorf("%s: interface_name must differ from physical_interface %q (set untagged: true on the native/PVID VLAN)", item.name, s.PhysicalInterface)
 		}
 		if item.name != "mgmt" {
 			if v.Gateway != "" {
@@ -432,6 +460,10 @@ func (s *Site) validate() error {
 		}
 	}
 
+	if err := s.validateManagementAccess(); err != nil {
+		return err
+	}
+
 	if !s.MgmtDHCP.IsEnabled() {
 		return nil
 	}
@@ -470,6 +502,72 @@ func (s *Site) MgmtIface() string {
 		return ""
 	}
 	return s.VLANs.Mgmt.Iface(s.PhysicalInterface)
+}
+
+// managementRoles is the set of VLAN roles that may reach SSH/status (22, 8080).
+var managementRoles = map[string]struct{}{"control": {}, "dante": {}, "mgmt": {}}
+
+// validateManagementAccess normalizes management_access and rejects unknown or
+// unconfigured roles. Consumed by generate-nftables.py; validated here so
+// `combiner -check` catches a typo before install rewrites the ruleset.
+func (s *Site) validateManagementAccess() error {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(s.ManagementAccess))
+	for _, raw := range s.ManagementAccess {
+		role := strings.ToLower(strings.TrimSpace(raw))
+		if _, ok := managementRoles[role]; !ok {
+			return fmt.Errorf("management_access: unknown role %q (want control|dante|mgmt)", raw)
+		}
+		if role == "mgmt" && !s.HasMgmt() {
+			return fmt.Errorf("management_access: mgmt listed but vlans.mgmt is not configured")
+		}
+		if _, ok := seen[role]; ok {
+			return fmt.Errorf("management_access: duplicate role %q", raw)
+		}
+		seen[role] = struct{}{}
+		out = append(out, role)
+	}
+	s.ManagementAccess = out
+	return nil
+}
+
+// ManagementRoles returns the VLAN roles allowed to reach SSH and the status
+// page. An omitted management_access defaults to control, plus mgmt when one is
+// configured — the historical behavior. An explicit list is authoritative, so a
+// site that names [control, dante] on a box with mgmt loses SSH via mgmt.
+func (s *Site) ManagementRoles() []string {
+	if len(s.ManagementAccess) > 0 {
+		return append([]string(nil), s.ManagementAccess...)
+	}
+	out := []string{"control"}
+	if s.HasMgmt() {
+		out = append(out, "mgmt")
+	}
+	return out
+}
+
+// ManagementIfaces maps ManagementRoles onto interface names.
+func (s *Site) ManagementIfaces() []string {
+	phys := s.PhysicalInterface
+	var out []string
+	for _, role := range s.ManagementRoles() {
+		var name string
+		switch role {
+		case "control":
+			name = s.VLANs.Control.Iface(phys)
+		case "dante":
+			name = s.VLANs.Dante.Iface(phys)
+		case "mgmt":
+			name = s.MgmtIface()
+		}
+		if name == "" {
+			continue
+		}
+		if !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // Denied reports whether ip falls in site deny_multicast_prefixes.

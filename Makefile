@@ -40,12 +40,14 @@ package: build-pi build-pi-arm build-linux-amd64
 		cp "bin/combiner-linux-$$arch" "$$stage/bin/combiner"; \
 		cp "bin/combiner-status-linux-$$arch" "$$stage/bin/combiner-status"; \
 		chmod 755 "$$stage/bin/combiner" "$$stage/bin/combiner-status"; \
-		cp config/site.example.yaml config/site.lab-flat.example.yaml "$$stage/config/"; \
+		cp config/site.example.yaml config/site.tagged-trunk.example.yaml \
+			config/site.lab-flat.example.yaml "$$stage/config/"; \
 		cp -a config/allowlists "$$stage/config/"; \
 		cp deploy/pi/install.sh \
 			deploy/pi/generate-nftables.py \
 			deploy/pi/generate-nftables.sh \
 			deploy/pi/generate-network-config.py \
+			deploy/pi/site_config.py \
 			deploy/pi/README.md \
 			"$$stage/deploy/pi/"; \
 		cp -a deploy/pi/systemd "$$stage/deploy/pi/"; \
@@ -77,10 +79,15 @@ fmt:
 fmt-check:
 	@test -z "$$(gofmt -l .)" || (echo "gofmt needed:" && gofmt -l . && exit 1)
 
+# Render every shipped profile: audio trunk (default), fully tagged, flat lab.
 generate-check:
-	python3 deploy/pi/generate-nftables.py config/site.example.yaml /tmp/combiner-nftables.conf
-	python3 deploy/pi/generate-network-config.py config/site.example.yaml /tmp/combiner-net
-	@command -v nft >/dev/null && nft -c -f /tmp/combiner-nftables.conf || echo "nft not installed — skipped nft -c"
-	@echo "ok: generated /tmp/combiner-nftables.conf and /tmp/combiner-net"
+	@for profile in site.example site.tagged-trunk.example site.lab-flat.example; do \
+		echo "generating $$profile"; \
+		python3 deploy/pi/generate-nftables.py config/$$profile.yaml /tmp/combiner-nftables-$$profile.conf || exit 1; \
+		python3 deploy/pi/generate-network-config.py config/$$profile.yaml /tmp/combiner-net-$$profile >/dev/null || exit 1; \
+		if command -v nft >/dev/null; then nft -c -f /tmp/combiner-nftables-$$profile.conf || exit 1; fi; \
+	done
+	@command -v nft >/dev/null || echo "nft not installed — skipped nft -c"
+	@echo "ok: generated /tmp/combiner-nftables-*.conf and /tmp/combiner-net-*"
 
 check: fmt-check test test-py lint-py generate-check build build-pi build-pi-arm build-linux-amd64

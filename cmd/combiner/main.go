@@ -3,37 +3,116 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
+	"text/tabwriter"
 	"time"
 
 	"github.com/msnow/vunet-dante-combiner-2000/internal/config"
 	"github.com/msnow/vunet-dante-combiner-2000/internal/inventory"
+	"github.com/msnow/vunet-dante-combiner-2000/internal/netinfo"
 	"github.com/msnow/vunet-dante-combiner-2000/internal/reflector"
 	"github.com/msnow/vunet-dante-combiner-2000/internal/statushttp"
 )
 
+// preflight prints what the combiner would run with. Config and allowlist
+// errors have already exited non-zero by this point; a missing interface is
+// reported as a warning because -check is also run on laptops, where the VLAN
+// devices legitimately do not exist.
+func preflight(out *os.File, path string, site *config.Site, ref *reflector.Service) {
+	fmt.Fprintf(out, "config OK: %s\n\n", path)
+
+	type row struct {
+		role, iface, vlan, addr string
+	}
+	rows := []row{}
+	add := func(role string, v config.VLAN) {
+		tag := fmt.Sprintf("%d tagged", v.ID)
+		if v.Untagged {
+			tag = fmt.Sprintf("%d untagged/PVID", v.ID)
+		}
+		rows = append(rows, row{role, v.Iface(site.PhysicalInterface), tag, fmt.Sprintf("%s/%d", v.Address, v.Prefix)})
+	}
+	if site.HasMgmt() {
+		add("mgmt", site.VLANs.Mgmt)
+	}
+	add("control", site.VLANs.Control)
+	add("dante", site.VLANs.Dante)
+
+	var missing []string
+	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(w, "ROLE\tINTERFACE\tVLAN\tADDRESS\tLINK")
+	for _, r := range rows {
+		st := netinfo.Describe(r.role, r.iface)
+		link := "up"
+		switch {
+		case st.Error != "":
+			link = "MISSING"
+			missing = append(missing, fmt.Sprintf("%s (%s)", r.iface, r.role))
+		case !st.Up:
+			link = "down"
+		case !st.HasAddr:
+			link = "up, no address"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", r.role, r.iface, r.vlan, r.addr, link)
+	}
+	_ = w.Flush()
+
+	ports := map[int]struct{}{}
+	names := make([]string, 0, len(site.Allowlists))
+	for _, al := range site.Allowlists {
+		names = append(names, al.Name)
+		for _, g := range al.Groups {
+			for _, ep := range g.Endpoints() {
+				ports[ep.Port] = struct{}{}
+			}
+		}
+	}
+
+	fmt.Fprintln(out)
+	w = tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+	fmt.Fprintf(w, "status listen\t%s\n", site.StatusListen)
+	fmt.Fprintf(w, "management access\t%s\n", strings.Join(site.ManagementIfaces(), ", "))
+	fmt.Fprintf(w, "deny prefixes\t%d\n", len(site.DenyPrefixes))
+	fmt.Fprintf(w, "allowlists\t%d (%s)\n", len(site.Allowlists), strings.Join(names, ", "))
+	fmt.Fprintf(w, "reflector\t%d group memberships on %d udp ports\n", ref.Stats().Groups, len(ports))
+	_ = w.Flush()
+
+	if ref.Stats().Groups == 0 {
+		fmt.Fprintln(out, "\nWARNING: no multicast groups allowlisted — discovery reflection will be idle")
+	}
+	if len(missing) > 0 {
+		fmt.Fprintf(out, "\nWARNING: interface(s) not present: %s\n", strings.Join(missing, ", "))
+		fmt.Fprintln(out, "         combiner will exit at startup until systemd-networkd creates them")
+	}
+}
+
 func main() {
 	cfgPath := flag.String("config", "/etc/combiner/site.yaml", "path to site.yaml")
-	checkOnly := flag.Bool("check", false, "validate config and exit")
+	checkOnly := flag.Bool("check", false, "validate config, report a preflight summary, and exit")
 	flag.Parse()
 
 	site, err := config.LoadSite(*cfgPath)
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	if *checkOnly {
-		log.Printf("config OK (%d allowlists, %d deny prefixes)", len(site.Allowlists), len(site.DenyPrefixes))
-		os.Exit(0)
-	}
 
 	inv := inventory.New()
+	// reflector.New cross-checks allowlists against the deny floor, so building
+	// it is part of validation — not just startup.
 	ref, err := reflector.New(site, inv)
 	if err != nil {
 		log.Fatalf("reflector: %v", err)
+	}
+
+	if *checkOnly {
+		preflight(os.Stdout, *cfgPath, site, ref)
+		os.Exit(0)
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

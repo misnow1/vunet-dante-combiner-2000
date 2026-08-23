@@ -6,6 +6,8 @@ How discovery and unicast control move through the combiner. Assumes a basic gra
 
 Walkthroughs below use the example hosts from `config/site.example.yaml` (`/21` audio nets): Control combiner `10.200.0.1`, Dante combiner `10.201.0.1`, PC `10.200.0.10`, IK42 `10.200.1.35`, Lake `10.201.2.162`. If your site uses other combiner IPs, substitute them.
 
+Interface names below are written `eth0.C` / `eth0.D` because tagging is a per-site choice. On the default **audio trunk** profile Dante is the port's untagged/PVID VLAN, so `eth0.D` is really `eth0` and only Control gets a `.200` subinterface; on a fully tagged trunk they are `eth0.200` and `eth0.201`. Nothing in the packet path changes — every rule keys on interface *name*, not on whether the frame carried a tag.
+
 ```text
 Martin Control 10.200.0.0/21                 Dante Primary 10.201.0.0/21
 ┌──────────────────────────────┐            ┌──────────────────────────────┐

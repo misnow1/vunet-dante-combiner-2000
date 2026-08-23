@@ -91,6 +91,17 @@ Until Lake groups are known, mDNS (`224.0.0.251`) reflection on Control↔Dante 
 | DiGiCo **without** SoundGrid | Console control LAN | Vendor | Native L2 on Control |
 | DiGiCo **with** SoundGrid | Control NIC is on the SoundGrid fabric (SoE + audio) | MultiRack on SG | **Out of scope** — do not merge onto Control |
 
+## Management access (SSH + status page)
+
+`management_access` in `site.yaml` picks which VLANs may reach TCP 22 and 8080. Omitted, it is Control plus Mgmt when one is configured. An explicit list is authoritative.
+
+| Role listed | Effect |
+| --- | --- |
+| (omitted) | Control, plus Mgmt when configured — default posture |
+| `dante` | Also accepts SSH/status from the audio VLAN. Needed only if the combiner may sit on a PVID-Dante **access** port with no tagged Control |
+
+ICMP echo is accepted on every combiner interface regardless, so a Dante-side ping succeeding while SSH refuses is the expected signature of a Control-less port.
+
 ## ICMP / ARP
 
 - ARP stays local to each VLAN.

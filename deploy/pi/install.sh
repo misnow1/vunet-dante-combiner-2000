@@ -44,7 +44,8 @@ if [[ "$DHCP_ENABLED" == "1" ]]; then
   apt-get install -y dnsmasq
 fi
 
-# VLAN support is mandatory: Control and Dante are always tagged.
+# VLAN support is mandatory: at least one of Control/Dante is always tagged
+# (only the port's single PVID VLAN can be untagged).
 if ! modprobe 8021q; then
   echo "cannot load 8021q — kernel has no VLAN support, aborting" >&2
   exit 1
@@ -62,6 +63,54 @@ if [[ "$SITE_YAML" != /etc/combiner/site.yaml ]]; then
 fi
 mkdir -p /etc/combiner/allowlists
 cp -a "$ROOT/config/allowlists/." /etc/combiner/allowlists/
+
+# Resolve binaries FIRST: they run the config preflight below, and a missing
+# binary must abort before anything is changed rather than after the ruleset,
+# networkd units, and NetworkManager have already been rewritten.
+BIN_DIR="$ROOT/bin"
+mkdir -p "$BIN_DIR"
+
+# A stale bin/combiner validates site.yaml against an OLDER schema and rejects
+# configs the current generators accept. Release trees ship no Go sources, so
+# their binary is correct by construction; a source checkout may not be.
+combiner_needs_build() {
+  [[ ! -x "$BIN_DIR/combiner" || ! -x "$BIN_DIR/combiner-status" ]] && return 0
+  [[ ! -d "$ROOT/cmd" ]] && return 1
+  [[ -n "$(find "$ROOT/cmd" "$ROOT/internal" -name '*.go' -newer "$BIN_DIR/combiner" -print -quit 2>/dev/null)" ]]
+}
+
+STALE_BINARY=0
+if combiner_needs_build; then
+  if command -v go >/dev/null 2>&1; then
+    echo "building combiner binaries (missing or older than sources)"
+    (cd "$ROOT" && go build -o "$BIN_DIR/combiner" ./cmd/combiner && go build -o "$BIN_DIR/combiner-status" ./cmd/combiner-status)
+  elif [[ -x "$BIN_DIR/combiner" ]]; then
+    STALE_BINARY=1
+  fi
+fi
+
+if [[ ! -x "$BIN_DIR/combiner" || ! -x "$BIN_DIR/combiner-status" ]]; then
+  echo "missing $BIN_DIR/combiner and/or $BIN_DIR/combiner-status" >&2
+  echo "download a release tarball, or build with Go and place binaries in bin/" >&2
+  echo "nothing has been changed on this system" >&2
+  exit 1
+fi
+
+if [[ "$STALE_BINARY" -eq 1 ]]; then
+  echo "warning: $BIN_DIR/combiner is older than the Go sources in this checkout" >&2
+  echo "         and Go is not installed, so it could not be rebuilt" >&2
+fi
+
+# Authoritative preflight: the Go loader is the schema (it rejects unknown keys
+# and cross-checks allowlists against the deny floor).
+if ! "$BIN_DIR/combiner" -check -config "$SITE_YAML"; then
+  echo "site.yaml failed validation — aborting before any change" >&2
+  if [[ "$STALE_BINARY" -eq 1 ]]; then
+    echo "note: the binary above predates this checkout — rebuild it (make build)" >&2
+    echo "      or use a release tarball before trusting this rejection" >&2
+  fi
+  exit 1
+fi
 
 # Keep forwarding OFF until a validated ruleset is loaded
 mkdir -p /etc/sysctl.d
@@ -136,19 +185,7 @@ HOSTNAME="$(python3 -c 'import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))
 echo "$HOSTNAME" >/etc/hostname
 hostnamectl set-hostname "$HOSTNAME" 2>/dev/null || hostname "$HOSTNAME"
 
-BIN_DIR="$ROOT/bin"
-mkdir -p "$BIN_DIR"
-# Prefer release / prebuilt binaries; only compile when either is missing.
-if [[ ! -x "$BIN_DIR/combiner" || ! -x "$BIN_DIR/combiner-status" ]]; then
-  if command -v go >/dev/null 2>&1; then
-    (cd "$ROOT" && go build -o "$BIN_DIR/combiner" ./cmd/combiner && go build -o "$BIN_DIR/combiner-status" ./cmd/combiner-status)
-  fi
-fi
-if [[ ! -x "$BIN_DIR/combiner" || ! -x "$BIN_DIR/combiner-status" ]]; then
-  echo "missing $BIN_DIR/combiner and/or $BIN_DIR/combiner-status" >&2
-  echo "download a release tarball, or build with Go and place binaries in bin/" >&2
-  exit 1
-fi
+# Binaries were resolved and preflighted near the top of this script.
 install -m 0755 "$BIN_DIR/combiner" /usr/local/bin/combiner
 install -m 0755 "$BIN_DIR/combiner-status" /usr/local/bin/combiner-status
 install -m 0644 "$ROOT/deploy/pi/systemd/combiner.service" /etc/systemd/system/combiner.service

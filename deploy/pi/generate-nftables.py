@@ -131,12 +131,27 @@ def main() -> int:
     if len(untagged_roles) > 1:
         raise SystemExit(f"only one VLAN may be untagged (a port has one PVID): {', '.join(untagged_roles)}")
 
+    # client_vlan decides which side the control clients sit on. It moves the
+    # unicast forward direction and the SNAT target — but deliberately NOT the
+    # PTP/media denies, which stay anchored to Control where the amps live.
+    client_role = str(site.get("client_vlan") or "control").lower()
+    if client_role not in ("control", "dante"):
+        raise SystemExit(f"client_vlan: unknown role {client_role!r} (want control|dante)")
+    peer_role = "control" if client_role == "dante" else "dante"
+    client_label = client_role.capitalize()
+    peer_label = peer_role.capitalize()
+
     i_control = iface(control, phys)
     i_dante = iface(dante, phys)
     i_mgmt = ""
     if has_mgmt:
         validate_ipv4(mgmt["address"], "mgmt.address")
         i_mgmt = iface(mgmt, phys)
+    # SNAT is "on egress toward interface X, rewrite to X's own address", so a
+    # device on X always sees an on-subnet peer. snat_to_dante is unconditional
+    # (Control and any Mgmt both reach Dante through it); snat_to_control is
+    # emitted when something actually egresses Control — a Mgmt uplink, or a
+    # Dante-side client under client_vlan: dante.
     snat_dante = (
         f'    oifname "{i_dante}" ip saddr != {dante["address"]} '
         f"counter name snat_to_dante snat to {dante['address']}\n"
@@ -159,12 +174,18 @@ def main() -> int:
 
     deny_prefixes = deny_prefixes_from_site(site)
     all_if_names = [i_control, i_dante] + ([i_mgmt] if has_mgmt else [])
-    client_if_names = [i_control] + ([i_mgmt] if has_mgmt else [])
+    # protected_if_names is Control (+ Mgmt) ALWAYS — never the client VLAN.
+    # These denies exist to keep PTP/AES67/ATP off the amp VLAN. Letting them
+    # follow client_vlan would start dropping PTP toward Dante, breaking the
+    # clock of the very network it is meant to carry.
+    protected_if_names = [i_control] + ([i_mgmt] if has_mgmt else [])
+    i_client = i_dante if client_role == "dante" else i_control
+    i_peer = i_control if client_role == "dante" else i_dante
     all_if = nft_set(all_if_names)
-    client_ifs = nft_set(client_if_names)
+    protected_ifs = nft_set(protected_if_names)
 
     forward_denies = "\n".join(
-        f'    oifname {client_ifs} ip daddr {p} counter name drop_deny_mcast drop comment "deny mcast {p}"'
+        f'    oifname {protected_ifs} ip daddr {p} counter name drop_deny_mcast drop comment "deny mcast {p}"'
         for p in deny_prefixes
     )
     input_denies = "\n".join(f'    iifname {all_if} ip daddr {p} drop comment "input deny {p}"' for p in deny_prefixes)
@@ -181,7 +202,7 @@ def main() -> int:
 
     snat_control = ""
     snat_counter = ""
-    if has_mgmt:
+    if has_mgmt or client_role == "dante":
         snat_counter = "  counter snat_to_control {}\n"
         snat_control = (
             f'    oifname "{i_control}" ip saddr != {control["address"]} '
@@ -220,10 +241,10 @@ table inet combiner {{
     meta nfproto ipv6 counter name drop_ipv6_forward drop
 
     # PTP (exact range) toward Control (and optional Mgmt) from any source
-    oifname {client_ifs} ip daddr 224.0.1.129-224.0.1.132 udp dport {{ 319, 320 }} counter name drop_ptp drop
+    oifname {protected_ifs} ip daddr 224.0.1.129-224.0.1.132 udp dport {{ 319, 320 }} counter name drop_ptp drop
 
     # Dante ATP media (same /16 as Shure Discovery — port 4321 only)
-    oifname {client_ifs} ip daddr 239.255.0.0/16 udp dport 4321 counter name drop_deny_mcast drop comment "ATP media"
+    oifname {protected_ifs} ip daddr 239.255.0.0/16 udp dport 4321 counter name drop_deny_mcast drop comment "ATP media"
 
     # Floor + site deny prefixes toward Control / Mgmt
 {forward_denies}
@@ -234,8 +255,8 @@ table inet combiner {{
 
     ct state established,related accept
 
-    # Unicast: Control clients → Dante (SNAT on egress)
-    iifname "{i_control}" oifname "{i_dante}" ip daddr != 224.0.0.0/4 accept
+    # Unicast: {client_label} clients → {peer_label} (SNAT on egress)
+    iifname "{i_client}" oifname "{i_peer}" ip daddr != 224.0.0.0/4 accept
 {mgmt_forward}
     counter name drop_invalid_path drop
   }}

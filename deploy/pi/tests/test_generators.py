@@ -189,3 +189,53 @@ def test_network_config_lab_flat(tmp_path: Path) -> None:
     ifaces = (out / "combiner-interfaces.txt").read_text()
     assert "mgmt eth0" in ifaces
     assert "control eth0.200" in ifaces
+
+
+def test_dante_client_inverts_unicast_and_snat(site_dante_client: Path, tmp_path: Path) -> None:
+    """client_vlan: dante reverses the unicast forward direction and the SNAT target.
+
+    Dante-side clients must egress toward Control and be rewritten to the
+    combiner's Control address, so Martin amps see an on-subnet peer.
+    """
+    out = tmp_path / "nftables.conf"
+    r = _run([sys.executable, str(NFT_SCRIPT), str(site_dante_client), str(out)])
+    assert r.returncode == 0, r.stderr
+    text = out.read_text()
+
+    # Unicast now flows Dante (eth0, the PVID) -> Control (eth0.200).
+    assert 'iifname "eth0" oifname "eth0.200" ip daddr != 224.0.0.0/4 accept' in text
+    assert 'iifname "eth0.200" oifname "eth0" ip daddr != 224.0.0.0/4 accept' not in text
+
+    # SNAT toward Control, to the combiner's Control address.
+    assert 'oifname "eth0.200" ip saddr != 10.200.0.1 counter name snat_to_control snat to 10.200.0.1' in text
+    assert "counter snat_to_control {}" in text
+
+
+def test_dante_client_keeps_denies_anchored_to_control(site_dante_client: Path, tmp_path: Path) -> None:
+    """The PTP/media denies must NOT follow client_vlan.
+
+    They exist to keep PTP and media off the amp VLAN. If they tracked the
+    client role they would start dropping PTP toward Dante and break the clock
+    of the network the combiner is meant to carry — a silent audio outage that
+    looks nothing like a config error.
+    """
+    out = tmp_path / "nftables.conf"
+    r = _run([sys.executable, str(NFT_SCRIPT), str(site_dante_client), str(out)])
+    assert r.returncode == 0, r.stderr
+    forward = out.read_text().split("chain forward")[1].split("chain postrouting")[0]
+
+    for marker in DENY_MARKERS:
+        deny_lines = [ln for ln in forward.splitlines() if marker in ln and "oifname" in ln]
+        assert deny_lines, f"no forward deny emitted for {marker}"
+        for ln in deny_lines:
+            assert '"eth0.200"' in ln, f"deny for {marker} must protect Control, got: {ln.strip()}"
+            # eth0 is the Dante PVID here; denying toward it would break PTP.
+            assert '{ "eth0" }' not in ln, f"deny for {marker} points at Dante: {ln.strip()}"
+
+
+def test_client_vlan_rejects_unknown_role(tmp_path: Path, site_example: Path) -> None:
+    bad = tmp_path / "site.yaml"
+    bad.write_text(site_example.read_text().replace("hostname: combiner", "hostname: combiner\nclient_vlan: mgmt"))
+    r = _run([sys.executable, str(NFT_SCRIPT), str(bad), str(tmp_path / "out.conf")])
+    assert r.returncode != 0
+    assert "client_vlan" in (r.stderr + r.stdout)

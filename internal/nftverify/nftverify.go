@@ -78,7 +78,9 @@ func compare(ruleset string, site *config.Site) Result {
 	// The SNAT source address is the invariant that silently breaks every
 	// Control->Dante conversation when it goes stale, so check it first.
 	want := map[string]string{"snat_to_dante": site.VLANs.Dante.Address}
-	if site.HasMgmt() {
+	// snat_to_control is emitted when something actually egresses Control: a
+	// Mgmt uplink, or a Dante-side client under client_vlan: dante.
+	if site.HasMgmt() || site.ClientRole() == "dante" {
 		want["snat_to_control"] = site.VLANs.Control.Address
 	}
 

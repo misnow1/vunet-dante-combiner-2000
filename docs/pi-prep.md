@@ -12,7 +12,10 @@ If you are installing a combiner on a show network, start at **[`setup.md`](setu
 | **A. Cross-compile on a laptop** | Developing before a release exists | **No** |
 | **B. Build on the Pi** | Convenience if you already develop on-device | **Yes** |
 
-Runtime packages (nftables, dnsmasq, etc.) are required either way. The installer installs most of them; this doc lists what to have ready and how to get binaries.
+Runtime packages (nftables, dnsmasq, etc.) are required either way. The installer
+probes for them and only calls `apt` for what is genuinely missing, so a Pi that
+was prepared at the bench installs fine with no Internet. This doc lists what to
+have ready and how to get binaries.
 
 ---
 
@@ -60,7 +63,9 @@ Maintainers publish packages by pushing a tag: `git tag v0.1.0 && git push origi
 
 ### Always (runtime / install)
 
-`install.sh` installs these if missing; you can pre-install:
+`install.sh` installs these if missing; pre-installing them means the install
+never touches the network — which is what you want for anything going into a
+rack (see [no Internet on the Pi](#no-internet-on-the-pi)):
 
 ```bash
 sudo apt-get update
@@ -81,6 +86,36 @@ Optional but useful for debugging:
 ```bash
 sudo apt-get install -y tcpdump tshark iperf3
 ```
+
+### No Internet on the Pi
+
+A racked combiner has no uplink, so `install.sh` never calls `apt` speculatively:
+
+- **Nothing missing** — it prints `all runtime dependencies present — skipping
+  apt` and does not touch the network at all.
+- **Something missing, apt reachable** — it installs just those packages, with a
+  hard timeout and no retries so a dead mirror fails fast instead of hanging.
+- **Something missing, no mirror** — it names the packages and exits **before
+  changing anything**.
+
+For that last case, stage the `.deb` files on a USB stick and point the installer
+at them:
+
+```bash
+# On a Pi of the SAME architecture that does have Internet:
+mkdir -p ~/combiner-debs && cd ~/combiner-debs
+apt-get download nftables python3-yaml iproute2 conntrack   # + dnsmasq if mgmt_dhcp
+
+# On the racked Pi, with the stick mounted:
+sudo ./deploy/pi/install.sh /etc/combiner/site.yaml --offline-debs /media/usb/combiner-debs
+```
+
+`apt-get download` fetches only the named packages, not their dependencies — on a
+stock Raspberry Pi OS Lite install the rest are already present, but check the
+installer output rather than assuming.
+
+Flashing a card that arrives pre-provisioned is the better long-term answer:
+[`sd-image.md`](sd-image.md).
 
 Kernel VLAN module (usually present):
 
@@ -205,6 +240,7 @@ Edit `site.yaml` with real VLAN IDs and addresses before a full install. Combine
 - [ ] `python3` + `python3-yaml` available
 - [ ] `nft` available (`nftables` package)
 - [ ] Release tree **or** repo with `bin/combiner` + `bin/combiner-status` (or `go` to build them)
+- [ ] If the Pi has no Internet: runtime packages already installed, or `.deb` files staged for `--offline-debs`
 - [ ] `/etc/combiner/site.yaml` edited for this site
 - [ ] Local console available (or you accept `--i-have-console` over SSH knowing you may lock yourself out)
 - [ ] Switch + DHCP prepared per [`setup.md`](setup.md)

@@ -64,7 +64,10 @@ async function refresh() {
   const d = await r.json();
   const tips = groupCatalog(d);
   document.getElementById('title').textContent = (d.hostname || 'combiner') + ' status';
-  document.getElementById('when').textContent = d.time || '';
+  // Version rides on the timestamp line: a field unit has no toolchain, so the
+  // status page is often the only way to tell what build is running.
+  document.getElementById('when').textContent =
+    [d.time || '', d.version ? 'combiner ' + d.version : ''].filter(Boolean).join(' · ');
 
   const ifaces = document.getElementById('ifaces');
   ifaces.replaceChildren();

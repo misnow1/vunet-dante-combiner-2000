@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/msnow/vunet-dante-combiner-2000/internal/buildinfo"
 	"github.com/msnow/vunet-dante-combiner-2000/internal/config"
 	"github.com/msnow/vunet-dante-combiner-2000/internal/inventory"
 	"github.com/msnow/vunet-dante-combiner-2000/internal/netinfo"
@@ -26,6 +27,7 @@ type Server struct {
 
 type payload struct {
 	Hostname   string                `json:"hostname"`
+	Version    string                `json:"version"`
 	Time       time.Time             `json:"time"`
 	Interfaces []netinfo.IfaceStatus `json:"interfaces"`
 	NFT        nftstatus.Counters    `json:"nft"`
@@ -98,6 +100,7 @@ func (s *Server) Snapshot() payload {
 	}
 	return payload{
 		Hostname:   site.Hostname,
+		Version:    buildinfo.String(),
 		Time:       time.Now().UTC(),
 		Interfaces: ifaces,
 		NFT:        nftstatus.Read(),

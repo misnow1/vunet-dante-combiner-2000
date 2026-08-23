@@ -3,14 +3,43 @@
 # Fail-closed: load drop-forward rules BEFORE enabling IP forwarding.
 set -euo pipefail
 
+usage() {
+  cat <<'USAGE'
+usage: install.sh [SITE_YAML] [--i-have-console] [--offline-debs DIR]
+
+  SITE_YAML           path to site.yaml (default /etc/combiner/site.yaml)
+  --i-have-console    proceed over SSH, accepting that this may lock you out
+  --offline-debs DIR  install runtime packages from .deb files in DIR instead
+                      of apt (for racked units with no Internet)
+USAGE
+}
+
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-SITE_YAML="${1:-/etc/combiner/site.yaml}"
+SITE_YAML=""
 I_HAVE_CONSOLE=0
-if [[ "${2:-}" == "--i-have-console" ]] || [[ "${1:-}" == "--i-have-console" ]]; then
-  I_HAVE_CONSOLE=1
-  if [[ "${1:-}" == "--i-have-console" ]]; then
-    SITE_YAML="${2:-/etc/combiner/site.yaml}"
-  fi
+OFFLINE_DEBS=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --i-have-console) I_HAVE_CONSOLE=1; shift ;;
+    --offline-debs)
+      [[ -n "${2:-}" ]] || { echo "--offline-debs needs a directory" >&2; exit 1; }
+      OFFLINE_DEBS="$2"; shift 2 ;;
+    --offline-debs=*) OFFLINE_DEBS="${1#--offline-debs=}"; shift ;;
+    -h|--help) usage; exit 0 ;;
+    -*) echo "unknown option: $1" >&2; usage >&2; exit 1 ;;
+    *)
+      if [[ -n "$SITE_YAML" ]]; then
+        echo "unexpected argument: $1" >&2; usage >&2; exit 1
+      fi
+      SITE_YAML="$1"; shift ;;
+  esac
+done
+SITE_YAML="${SITE_YAML:-/etc/combiner/site.yaml}"
+
+if [[ -n "$OFFLINE_DEBS" && ! -d "$OFFLINE_DEBS" ]]; then
+  echo "--offline-debs: not a directory: $OFFLINE_DEBS" >&2
+  exit 1
 fi
 
 STAGING="$(mktemp -d)"
@@ -34,35 +63,6 @@ if [[ -n "${SSH_CONNECTION:-}" && "$I_HAVE_CONSOLE" -ne 1 ]]; then
   echo "run from a serial/HDMI console, or re-run with --i-have-console" >&2
   exit 1
 fi
-
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -y
-apt-get install -y nftables python3-yaml iproute2 conntrack
-
-DHCP_ENABLED="$(python3 -c 'import yaml,sys; d=yaml.safe_load(open(sys.argv[1])).get("mgmt_dhcp") or {}; print("1" if d.get("enabled", False) else "0")' "$SITE_YAML")"
-if [[ "$DHCP_ENABLED" == "1" ]]; then
-  apt-get install -y dnsmasq
-fi
-
-# VLAN support is mandatory: at least one of Control/Dante is always tagged
-# (only the port's single PVID VLAN can be untagged).
-if ! modprobe 8021q; then
-  echo "cannot load 8021q — kernel has no VLAN support, aborting" >&2
-  exit 1
-fi
-echo 8021q >/etc/modules-load.d/combiner-8021q.conf
-
-# Avoid conflict with combiner mDNS reflector on udp/5353
-systemctl disable --now avahi-daemon 2>/dev/null || true
-systemctl mask avahi-daemon 2>/dev/null || true
-
-mkdir -p /etc/combiner
-if [[ "$SITE_YAML" != /etc/combiner/site.yaml ]]; then
-  cp "$SITE_YAML" /etc/combiner/site.yaml
-  SITE_YAML=/etc/combiner/site.yaml
-fi
-mkdir -p /etc/combiner/allowlists
-cp -a "$ROOT/config/allowlists/." /etc/combiner/allowlists/
 
 # Resolve binaries FIRST: they run the config preflight below, and a missing
 # binary must abort before anything is changed rather than after the ruleset,
@@ -101,9 +101,18 @@ if [[ "$STALE_BINARY" -eq 1 ]]; then
   echo "         and Go is not installed, so it could not be rebuilt" >&2
 fi
 
+# Preflight against a STAGED copy of what will be installed, so that nothing on
+# this box changes until the config is known good. allowlist_files resolve
+# relative to site.yaml, so the staged pair has to mirror the final /etc layout
+# exactly -- which it does, because the real install below copies this tree.
+STAGED_ETC="$STAGING/etc-combiner"
+mkdir -p "$STAGED_ETC/allowlists"
+cp "$SITE_YAML" "$STAGED_ETC/site.yaml"
+cp -a "$ROOT/config/allowlists/." "$STAGED_ETC/allowlists/"
+
 # Authoritative preflight: the Go loader is the schema (it rejects unknown keys
 # and cross-checks allowlists against the deny floor).
-if ! "$BIN_DIR/combiner" -check -config "$SITE_YAML"; then
+if ! "$BIN_DIR/combiner" -check -config "$STAGED_ETC/site.yaml"; then
   echo "site.yaml failed validation — aborting before any change" >&2
   if [[ "$STALE_BINARY" -eq 1 ]]; then
     echo "note: the binary above predates this checkout — rebuild it (make build)" >&2
@@ -111,6 +120,99 @@ if ! "$BIN_DIR/combiner" -check -config "$SITE_YAML"; then
   fi
   exit 1
 fi
+
+# Read site.yaml facts through the Go loader rather than python3-yaml: this
+# script is responsible for INSTALLING python3-yaml, so it cannot depend on it
+# to decide what to install.
+FACTS="$("$BIN_DIR/combiner" -config "$STAGED_ETC/site.yaml" -print-facts)" || {
+  echo "could not read site.yaml facts — aborting before any change" >&2
+  exit 1
+}
+eval "$FACTS"
+DHCP_ENABLED="$COMBINER_MGMT_DHCP_ENABLED"
+
+# --- runtime dependencies --------------------------------------------------
+# A racked combiner has no Internet, so never reach for apt on a box that
+# already has what it needs, and fail with an actionable list rather than deep
+# inside apt on one that cannot reach a mirror.
+REQUIRED_PKGS=()
+missing_pkgs() {
+  REQUIRED_PKGS=()
+  command -v nft       >/dev/null 2>&1 || REQUIRED_PKGS+=(nftables)
+  command -v ip        >/dev/null 2>&1 || REQUIRED_PKGS+=(iproute2)
+  command -v conntrack >/dev/null 2>&1 || REQUIRED_PKGS+=(conntrack)
+  command -v python3   >/dev/null 2>&1 || REQUIRED_PKGS+=(python3)
+  # The nftables/networkd generators import yaml; the Go binary does not.
+  python3 -c 'import yaml' >/dev/null 2>&1 || REQUIRED_PKGS+=(python3-yaml)
+  if [[ "$DHCP_ENABLED" == "1" ]]; then
+    command -v dnsmasq >/dev/null 2>&1 || REQUIRED_PKGS+=(dnsmasq)
+  fi
+}
+
+apt_install() {
+  export DEBIAN_FRONTEND=noninteractive
+  # No retries and a hard timeout: with no uplink this must fail fast instead
+  # of sitting in DNS and connect timeouts for minutes.
+  timeout 180 apt-get update -y -o Acquire::Retries=0 ||
+    echo "warning: apt-get update failed — trying the local package cache" >&2
+  timeout 300 apt-get install -y -o Acquire::Retries=0 "$@"
+}
+
+missing_pkgs
+if [[ ${#REQUIRED_PKGS[@]} -eq 0 ]]; then
+  echo "all runtime dependencies present — skipping apt"
+elif [[ -n "$OFFLINE_DEBS" ]]; then
+  echo "installing from $OFFLINE_DEBS: ${REQUIRED_PKGS[*]}"
+  shopt -s nullglob
+  DEBS=("$OFFLINE_DEBS"/*.deb)
+  shopt -u nullglob
+  if [[ ${#DEBS[@]} -eq 0 ]]; then
+    echo "no .deb files in $OFFLINE_DEBS" >&2
+    echo "nothing has been changed on this system" >&2
+    exit 1
+  fi
+  # dpkg exits non-zero on unmet dependencies but may still have unpacked
+  # everything that matters, so let the re-check below be the verdict.
+  if ! dpkg -i "${DEBS[@]}"; then
+    echo "warning: dpkg reported errors — verifying what is usable below" >&2
+  fi
+elif ! apt_install "${REQUIRED_PKGS[@]}"; then
+  echo "" >&2
+  echo "cannot install missing runtime dependencies: ${REQUIRED_PKGS[*]}" >&2
+  echo "a racked combiner usually has no Internet. Either:" >&2
+  echo "  - pre-install them where apt works:" >&2
+  echo "      sudo apt-get install -y ${REQUIRED_PKGS[*]}" >&2
+  echo "  - or stage the .deb files on removable media and re-run with:" >&2
+  echo "      sudo $0 $SITE_YAML --offline-debs /path/to/debs" >&2
+  echo "nothing has been changed on this system" >&2
+  exit 1
+fi
+
+# Installing is not the same as working: a partial dpkg run exits 0 per-package
+# but can still leave a dependency unmet.
+missing_pkgs
+if [[ ${#REQUIRED_PKGS[@]} -ne 0 ]]; then
+  echo "still missing after install: ${REQUIRED_PKGS[*]}" >&2
+  exit 1
+fi
+
+# VLAN support is mandatory: at least one of Control/Dante is always tagged
+# (only the port's single PVID VLAN can be untagged).
+if ! modprobe 8021q; then
+  echo "cannot load 8021q — kernel has no VLAN support, aborting" >&2
+  exit 1
+fi
+echo 8021q >/etc/modules-load.d/combiner-8021q.conf
+
+# Avoid conflict with combiner mDNS reflector on udp/5353
+systemctl disable --now avahi-daemon 2>/dev/null || true
+systemctl mask avahi-daemon 2>/dev/null || true
+
+mkdir -p /etc/combiner/allowlists
+cp "$STAGED_ETC/site.yaml" /etc/combiner/site.yaml
+cp -a "$STAGED_ETC/allowlists/." /etc/combiner/allowlists/
+SITE_YAML=/etc/combiner/site.yaml
+
 
 # Keep forwarding OFF until a validated ruleset is loaded
 mkdir -p /etc/sysctl.d
@@ -154,7 +256,7 @@ python3 "$ROOT/deploy/pi/generate-network-config.py" "$SITE_YAML" "$STAGING"
 # networkd only hands DNS= to systemd-resolved, so install it just for the lab
 # uplink case. Installing it rewrites /etc/resolv.conf as a symlink to its stub,
 # which leaves the box with no DNS at all if resolved is not actually running.
-MGMT_DNS_COUNT="$(python3 -c 'import yaml,sys; v=yaml.safe_load(open(sys.argv[1])).get("vlans") or {}; m=v.get("mgmt") or {}; print(len(m.get("dns") or []))' "$SITE_YAML")"
+MGMT_DNS_COUNT="$COMBINER_MGMT_DNS_COUNT"
 if [[ "$MGMT_DNS_COUNT" -gt 0 ]]; then
   apt-get install -y systemd-resolved || true
 fi
@@ -181,7 +283,7 @@ mkdir -p /etc/systemd/network
 rm -f /etc/systemd/network/*combiner*.netdev /etc/systemd/network/*combiner*.network
 cp -a "$STAGING/systemd/network/." /etc/systemd/network/
 
-HOSTNAME="$(python3 -c 'import yaml,sys; print(yaml.safe_load(open(sys.argv[1])).get("hostname") or "combiner")' "$SITE_YAML")"
+HOSTNAME="$COMBINER_HOSTNAME"
 echo "$HOSTNAME" >/etc/hostname
 hostnamectl set-hostname "$HOSTNAME" 2>/dev/null || hostname "$HOSTNAME"
 
@@ -223,7 +325,7 @@ done
 if [[ -n "$MISSING" ]]; then
   echo "systemd-networkd did not create: $MISSING" >&2
   echo "forwarding is still OFF; combiner not started" >&2
-  echo "if Mgmt should be native/untagged on $(python3 -c 'import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))["physical_interface"])' "$SITE_YAML"), set vlans.mgmt.untagged: true in $SITE_YAML" >&2
+  echo "if Mgmt should be native/untagged on $COMBINER_PHYSICAL_INTERFACE, set vlans.mgmt.untagged: true in $SITE_YAML" >&2
   networkd_diagnostics
   exit 1
 fi

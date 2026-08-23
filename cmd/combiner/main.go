@@ -4,15 +4,18 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
 	"time"
 
+	"github.com/msnow/vunet-dante-combiner-2000/internal/buildinfo"
 	"github.com/msnow/vunet-dante-combiner-2000/internal/config"
 	"github.com/msnow/vunet-dante-combiner-2000/internal/inventory"
 	"github.com/msnow/vunet-dante-combiner-2000/internal/netinfo"
@@ -26,6 +29,7 @@ import (
 // reported as a warning because -check is also run on laptops, where the VLAN
 // devices legitimately do not exist.
 func preflight(out *os.File, path string, site *config.Site, ref *reflector.Service) (ok bool) {
+	fmt.Fprintf(out, "combiner %s\n", buildinfo.String())
 	fmt.Fprintf(out, "config OK: %s\n\n", path)
 
 	type row struct {
@@ -118,14 +122,54 @@ func preflight(out *os.File, path string, site *config.Site, ref *reflector.Serv
 	return drift.OK()
 }
 
+// shellQuote renders s as a single-quoted shell word. install.sh eval's this
+// output, so Go's %q is not good enough — it escapes for Go, not for sh.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// printSiteFacts emits the site.yaml values install.sh needs, as shell
+// assignments. Quoting is safe because the loader has already validated these
+// as hostnames, interface names, and integers.
+func printSiteFacts(out io.Writer, site *config.Site) {
+	enabled := "0"
+	if site.MgmtDHCP.IsEnabled() {
+		enabled = "1"
+	}
+	hostname := site.Hostname
+	if hostname == "" {
+		hostname = "combiner"
+	}
+
+	fmt.Fprintf(out, "COMBINER_HOSTNAME=%s\n", shellQuote(hostname))
+	fmt.Fprintf(out, "COMBINER_PHYSICAL_INTERFACE=%s\n", shellQuote(site.PhysicalInterface))
+	fmt.Fprintf(out, "COMBINER_MGMT_DHCP_ENABLED=%s\n", shellQuote(enabled))
+	fmt.Fprintf(out, "COMBINER_MGMT_DNS_COUNT=%s\n", shellQuote(strconv.Itoa(len(site.VLANs.Mgmt.DNS))))
+}
+
 func main() {
 	cfgPath := flag.String("config", "/etc/combiner/site.yaml", "path to site.yaml")
 	checkOnly := flag.Bool("check", false, "validate config, report a preflight summary, and exit")
+	printFacts := flag.Bool("print-facts", false, "print shell-sourceable COMBINER_* facts from site.yaml and exit")
+	showVersion := flag.Bool("version", false, "print the build version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(buildinfo.String())
+		return
+	}
 
 	site, err := config.LoadSite(*cfgPath)
 	if err != nil {
 		log.Fatalf("config: %v", err)
+	}
+
+	// install.sh sources this instead of parsing site.yaml with python3-yaml —
+	// a module the installer is itself responsible for installing. Emitted
+	// before the reflector is built so it works on a box with no interfaces.
+	if *printFacts {
+		printSiteFacts(os.Stdout, site)
+		return
 	}
 
 	inv := inventory.New()

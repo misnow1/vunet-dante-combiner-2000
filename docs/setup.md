@@ -21,6 +21,7 @@ Pick the profile that matches your combiner port, copy it to `/etc/combiner/site
 | **Audio trunk** — PVID/untagged Dante, tagged Control | [`config/site.example.yaml`](../config/site.example.yaml) **(default)** |
 | Fully tagged — no untagged VLAN on the port | [`config/site.tagged-trunk.example.yaml`](../config/site.tagged-trunk.example.yaml) |
 | Flat lab LAN — untagged Mgmt uplink, Control/Dante tagged | [`config/site.lab-flat.example.yaml`](../config/site.lab-flat.example.yaml) |
+| Control clients live on **Dante** instead | [`config/site.dante-client.example.yaml`](../config/site.dante-client.example.yaml) |
 
 Example prefixes (`/21` on the audio nets):
 
@@ -132,13 +133,22 @@ sudo cp config/site.example.yaml /etc/combiner/site.yaml   # or site.tagged-trun
 sudo ./deploy/pi/install.sh /etc/combiner/site.yaml --i-have-console
 ```
 
+The installer only reaches for `apt` when something is actually missing, so a Pi
+that was prepared at the bench installs with no Internet. If packages *are*
+missing and there is no mirror, it names them and stops without changing
+anything — stage them with `--offline-debs DIR` ([`pi-prep.md`](pi-prep.md)).
+
 Building binaries yourself, the `virgil01` lab board, and Go: [`pi-prep.md`](pi-prep.md). Installer failure modes: [`../deploy/pi/README.md`](../deploy/pi/README.md).
+
+Flashing a pre-configured card instead of running the installer is planned, not
+yet available: [`sd-image.md`](sd-image.md).
 
 ## 5. Check that it works
 
 On the combiner:
 
 ```bash
+combiner -version                                # which build is this
 combiner -check -config /etc/combiner/site.yaml   # preflight: config + interfaces
 ip -br addr
 sudo combiner-status

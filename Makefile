@@ -1,33 +1,42 @@
 .PHONY: build build-pi build-pi-arm build-linux-amd64 package test test-py lint-py fmt fmt-check generate-check nft-check check
 
-# Strip leading v from VERSION (e.g. v0.1.0 → 0.1.0). Override: make package VERSION=0.1.0
-VERSION ?= $(shell v=$$(git describe --tags --exact-match 2>/dev/null) || v=$$(git describe --tags --always 2>/dev/null) || v=dev; echo $${v#v})
+# Version for stamped binaries and package names (e.g. v0.1.0 → 0.1.0).
+# Override: make package VERSION=0.1.0
+# Strip the leading v with sed rather than $${v#v}: GNU Make 3.81 (still the
+# system make on macOS) reads that '#' as a comment and fails to parse. Use
+# gmake locally; this just keeps plain `make` working for anyone who doesn't.
+VERSION ?= $(shell v=$$(git describe --tags --exact-match 2>/dev/null || git describe --tags --always 2>/dev/null || echo dev); echo "$$v" | sed 's/^v//')
 DIST := dist
 PACKAGE_PREFIX := vunet-dante-combiner-$(VERSION)
 PACKAGE_ARCHS := arm64 arm amd64
 
+# Stamp the version into every binary: a field unit has no toolchain and no
+# Internet, so `combiner -version` is the only way to identify what it runs.
+LDFLAGS := -X github.com/msnow/vunet-dante-combiner-2000/internal/buildinfo.Version=$(VERSION)
+GOBUILD := go build -ldflags "$(LDFLAGS)"
+
 build:
 	mkdir -p bin
-	go build -o bin/combiner ./cmd/combiner
-	go build -o bin/combiner-status ./cmd/combiner-status
+	$(GOBUILD) -o bin/combiner ./cmd/combiner
+	$(GOBUILD) -o bin/combiner-status ./cmd/combiner-status
 
 # 64-bit Raspberry Pi OS (lab virgil01 / aarch64, Pi 4/5)
 build-pi:
 	mkdir -p bin
-	GOOS=linux GOARCH=arm64 go build -o bin/combiner-linux-arm64 ./cmd/combiner
-	GOOS=linux GOARCH=arm64 go build -o bin/combiner-status-linux-arm64 ./cmd/combiner-status
+	GOOS=linux GOARCH=arm64 $(GOBUILD) -o bin/combiner-linux-arm64 ./cmd/combiner
+	GOOS=linux GOARCH=arm64 $(GOBUILD) -o bin/combiner-status-linux-arm64 ./cmd/combiner-status
 
 # 32-bit Raspberry Pi OS (common on Pi 3)
 build-pi-arm:
 	mkdir -p bin
-	GOOS=linux GOARCH=arm GOARM=7 go build -o bin/combiner-linux-arm ./cmd/combiner
-	GOOS=linux GOARCH=arm GOARM=7 go build -o bin/combiner-status-linux-arm ./cmd/combiner-status
+	GOOS=linux GOARCH=arm GOARM=7 $(GOBUILD) -o bin/combiner-linux-arm ./cmd/combiner
+	GOOS=linux GOARCH=arm GOARM=7 $(GOBUILD) -o bin/combiner-status-linux-arm ./cmd/combiner-status
 
 # x86_64 Linux (lab servers / future non-Pi hosts)
 build-linux-amd64:
 	mkdir -p bin
-	GOOS=linux GOARCH=amd64 go build -o bin/combiner-linux-amd64 ./cmd/combiner
-	GOOS=linux GOARCH=amd64 go build -o bin/combiner-status-linux-amd64 ./cmd/combiner-status
+	GOOS=linux GOARCH=amd64 $(GOBUILD) -o bin/combiner-linux-amd64 ./cmd/combiner
+	GOOS=linux GOARCH=amd64 $(GOBUILD) -o bin/combiner-status-linux-amd64 ./cmd/combiner-status
 
 # Stage install trees under dist/ and create per-arch tarballs + SHA256SUMS.
 package: build-pi build-pi-arm build-linux-amd64
@@ -40,8 +49,7 @@ package: build-pi build-pi-arm build-linux-amd64
 		cp "bin/combiner-linux-$$arch" "$$stage/bin/combiner"; \
 		cp "bin/combiner-status-linux-$$arch" "$$stage/bin/combiner-status"; \
 		chmod 755 "$$stage/bin/combiner" "$$stage/bin/combiner-status"; \
-		cp config/site.example.yaml config/site.tagged-trunk.example.yaml \
-			config/site.lab-flat.example.yaml "$$stage/config/"; \
+		cp config/site*.example.yaml "$$stage/config/"; \
 		cp -a config/allowlists "$$stage/config/"; \
 		cp deploy/pi/install.sh \
 			deploy/pi/generate-nftables.py \
@@ -79,12 +87,14 @@ fmt:
 fmt-check:
 	@test -z "$$(gofmt -l .)" || (echo "gofmt needed:" && gofmt -l . && exit 1)
 
-# Render every shipped profile: audio trunk (default), fully tagged, flat lab.
+# Render every shipped profile (config/site*.example.yaml), so a new profile
+# is covered by CI and lands in release packages without editing this file.
 generate-check:
-	@for profile in site.example site.tagged-trunk.example site.lab-flat.example; do \
+	@for f in config/site*.example.yaml; do \
+		profile="$$(basename "$$f" .yaml)"; \
 		echo "generating $$profile"; \
-		python3 deploy/pi/generate-nftables.py config/$$profile.yaml /tmp/combiner-nftables-$$profile.conf || exit 1; \
-		python3 deploy/pi/generate-network-config.py config/$$profile.yaml /tmp/combiner-net-$$profile >/dev/null || exit 1; \
+		python3 deploy/pi/generate-nftables.py "$$f" /tmp/combiner-nftables-$$profile.conf || exit 1; \
+		python3 deploy/pi/generate-network-config.py "$$f" /tmp/combiner-net-$$profile >/dev/null || exit 1; \
 	done
 	@$(MAKE) --no-print-directory nft-check
 	@echo "ok: generated /tmp/combiner-nftables-*.conf and /tmp/combiner-net-*"

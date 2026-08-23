@@ -27,6 +27,7 @@ A portable Linux gateway so one control client (laptop or tablet) on the **Marti
 | [`docs/capture-playbook.md`](docs/capture-playbook.md) | Confirm Dante/Shure; capture Lake groups |
 | [`docs/break-glass.md`](docs/break-glass.md) | Combiner down |
 | [`docs/pi-prep.md`](docs/pi-prep.md) | Building binaries, Go, virgil01 lab board |
+| [`docs/sd-image.md`](docs/sd-image.md) | **Planned** — pre-configured microSD cards, read-only root |
 | [`docs/productization.md`](docs/productization.md) | Future hardware (PoE, Sipeed) |
 | [`config/site.example.yaml`](config/site.example.yaml) | **Default** — audio trunk: untagged Dante (PVID), tagged Control |
 | [`config/site.tagged-trunk.example.yaml`](config/site.tagged-trunk.example.yaml) | Fully tagged trunk (no untagged VLAN on the port) |
@@ -86,6 +87,19 @@ combiner -check -config /etc/combiner/site.yaml && sudo systemctl restart combin
 ```
 
 Interfaces that do not exist yet are reported as a **warning**, not a failure — the same command is meant to run on a laptop, where the VLAN devices legitimately are not there. `install.sh` runs this check before it changes anything.
+
+## Which build is this?
+
+Release binaries are stamped, so a field unit can identify itself with no
+toolchain and no network:
+
+```bash
+combiner -version          # 0.1.0
+combiner-status -version
+```
+
+The version also heads `combiner -check` output, `combiner-status`, and the
+status page. Unreleased builds report the git revision instead (`dev (a1b2c3d)`).
 
 ## License
 

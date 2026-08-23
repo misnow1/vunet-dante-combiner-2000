@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"text/tabwriter"
 
+	"github.com/msnow/vunet-dante-combiner-2000/internal/buildinfo"
 	"github.com/msnow/vunet-dante-combiner-2000/internal/config"
 	"github.com/msnow/vunet-dante-combiner-2000/internal/netinfo"
 	"github.com/msnow/vunet-dante-combiner-2000/internal/nftstatus"
@@ -16,7 +17,13 @@ import (
 func main() {
 	cfgPath := flag.String("config", "/etc/combiner/site.yaml", "path to site.yaml")
 	asJSON := flag.Bool("json", false, "emit JSON")
+	showVersion := flag.Bool("version", false, "print the build version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(buildinfo.String())
+		return
+	}
 
 	site, err := config.LoadSite(*cfgPath)
 	if err != nil {
@@ -25,12 +32,14 @@ func main() {
 	}
 
 	type snap struct {
+		Version    string                `json:"version"`
 		Interfaces []netinfo.IfaceStatus `json:"interfaces"`
 		NFT        nftstatus.Counters    `json:"nft"`
 		DHCPLeases []string              `json:"dhcp_leases"`
 	}
 	s := snap{
-		NFT: nftstatus.Read(),
+		Version: buildinfo.String(),
+		NFT:     nftstatus.Read(),
 		DHCPLeases: netinfo.DHCPLeases(
 			"/var/lib/misc/dnsmasq.leases",
 			"/var/lib/dnsmasq/dnsmasq.leases",
@@ -54,6 +63,7 @@ func main() {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintf(w, "combiner %s\n\n", s.Version)
 	fmt.Fprintln(w, "ROLE\tIFACE\tUP\tADDRESSES")
 	for _, i := range s.Interfaces {
 		fmt.Fprintf(w, "%s\t%s\t%v\t%s\n", i.Role, i.Name, i.Up, join(i.Addresses))

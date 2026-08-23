@@ -4,6 +4,26 @@ What `install.sh` does and how to recover when it fails. **Addresses, switch por
 
 Installs VLAN interfaces, optional lab Mgmt DHCP (`dnsmasq`), fail-closed `nftables`, and the `combiner` service on Debian / Raspberry Pi OS.
 
+## Order of operations
+
+Everything that can reject the install happens **before** anything on the box
+changes, so a failed run leaves no residue:
+
+1. Argument, root, and SSH checks.
+2. Resolve `bin/combiner` + `bin/combiner-status` (build them only if this is a
+   source checkout with Go available).
+3. Stage `site.yaml` and the allowlists in a temp dir and run `combiner -check`
+   against that staged pair — the same layout the install will produce, so
+   `allowlist_files` resolve exactly as they will in `/etc/combiner`.
+4. Read `site.yaml` facts via `combiner -print-facts`. The installer does not
+   parse YAML with Python, because it is the thing responsible for installing
+   `python3-yaml`.
+5. Resolve runtime packages: skip `apt` entirely if nothing is missing, else
+   install from `--offline-debs` or `apt`, else abort with the exact list.
+
+Only after all five does it load the module, disable `avahi`, write
+`/etc/combiner`, and rewrite networking.
+
 ## Prerequisites
 
 - Raspberry Pi with GbE (Pi 4/5 recommended; Pi 3 OK for early lab)
@@ -78,6 +98,17 @@ sudo mkdir -p /etc/combiner
 sudo cp config/site.example.yaml /etc/combiner/site.yaml   # or site.tagged-trunk / site.lab-flat
 # edit /etc/combiner/site.yaml
 sudo ./deploy/pi/install.sh /etc/combiner/site.yaml --i-have-console
+```
+
+### Options
+
+```text
+usage: install.sh [SITE_YAML] [--i-have-console] [--offline-debs DIR]
+
+  SITE_YAML           path to site.yaml (default /etc/combiner/site.yaml)
+  --i-have-console    proceed over SSH, accepting that this may lock you out
+  --offline-debs DIR  install runtime packages from .deb files in DIR instead
+                      of apt (for racked units with no Internet)
 ```
 
 `install.sh` uses the prebuilt `bin/` binaries and does not require Go.

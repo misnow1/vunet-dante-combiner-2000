@@ -1,6 +1,9 @@
 package nftstatus
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseTextIndented(t *testing.T) {
 	sample := `table inet combiner {
@@ -34,3 +37,26 @@ func TestParseTextNamed(t *testing.T) {
 		t.Fatalf("drop_ptp=%d", c.DropPTP)
 	}
 }
+
+// Read falls back through three nft invocations; the first error is nil when
+// that call succeeded but returned unparseable JSON. joinErr must tolerate that
+// rather than dereferencing it.
+func TestJoinErrToleratesNilFirstError(t *testing.T) {
+	got := joinErr("bad json", nil, errTest{"scrape failed"})
+	if got == "" {
+		t.Fatal("expected a diagnostic")
+	}
+	if !strings.Contains(got, "scrape failed") {
+		t.Errorf("missing underlying error: %q", got)
+	}
+}
+
+func TestJoinErrAlwaysReturnsSomething(t *testing.T) {
+	if got := joinErr("", nil); got == "" {
+		t.Error("expected a non-empty fallback diagnostic")
+	}
+}
+
+type errTest struct{ s string }
+
+func (e errTest) Error() string { return e.s }

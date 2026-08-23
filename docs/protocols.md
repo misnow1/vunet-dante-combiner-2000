@@ -9,7 +9,7 @@ Laptops and iPads sit on **Martin Control** with VuNET, Yamaha mixer-control, an
 | Dante discovery/control | Reflect allowlisted multicast Control↔Dante; SNAT unicast to Dante |
 | Shure WWB (on Dante VLAN) | Same path; extra discovery group `239.255.254.253:8427` |
 | Lake Controller | Dante VLAN; reflect after capture |
-| VuNET / Martin | Native L2 on Control — **not reflected** |
+| VuNET / Martin | Native L2 on Control — **not reflected** (reflected only under `client_vlan: dante`) |
 | Yamaha mixer control | Native L2 on Control — **not reflected** |
 | Allen & Heath MixPad | Native L2 on Control — **not reflected** (UDP broadcast) |
 | Dante PTP / ATP / AES67 | Hard deny toward Control (and optional Mgmt) |
@@ -66,11 +66,26 @@ Shure’s own guidance: devices expect same-VLAN multicast; Discovery should reg
 
 Amp **control** must stay off Dante **PTP and media** (Martin best practice: PTP can overwhelm the amp stack). Light discovery multicast from Dante Controller / WWB on Control is accepted in this topology.
 
-VuNET discovery groups are **not** a combiner allowlist. Clients share the Control broadcast domain with the amps, so VuNET works as in break-glass (native L2). Unicast is on-subnet; no SNAT.
+Under the **default** (control-client) profile, VuNET discovery groups are **not** a combiner allowlist. Clients share the Control broadcast domain with the amps, so VuNET works as in break-glass (native L2). Unicast is on-subnet; no SNAT. Adding a Control-VLAN group there would hairpin Control onto itself, and config rejects it.
 
-[`config/allowlists/vunet.yaml`](../config/allowlists/vunet.yaml) is a leftover stub and is **not** loaded. Do not add Control-VLAN groups to the reflector — that would try to hairpin Control onto itself.
+Under [`config/site.dante-client.example.yaml`](../config/site.dante-client.example.yaml) (`client_vlan: dante`) the roles invert: clients sit on Dante for full Dante Controller function, and VuNET becomes the reflected protocol. [`config/allowlists/vunet.yaml`](../config/allowlists/vunet.yaml) is loaded **only** in that profile.
 
-A capture on Control is still useful to *document* VuNET groups for operators, not to feed the reflector. See [`capture-playbook.md`](capture-playbook.md).
+### Measured behaviour (12 WPC amps, 2026-08-23)
+
+| Element | Value |
+| --- | --- |
+| Discovery group | `239.254.10.2`, UDP **6002** and **54077**, TTL **1** |
+| Amp announce | 91-byte, source port == destination port |
+| VuNET query | 23-byte, ephemeral source port |
+| Control session | **TCP 63489**, client-initiated, long-lived, no teardown |
+
+Discovery is query/response over the group, so the allowlist uses `direction: both`. TTL 1 is not an obstacle — the reflector re-originates rather than forwarding.
+
+Control is **client-initiated TCP only**; amps never originate traffic toward the controller, which is why SNAT carries it cleanly (unlike Dante, which needs L2 adjacency for metering and device config).
+
+VuNET also broadcasts a Lantronix probe (`00 00 00 F6` to `255.255.255.255:30718`) about every 3.4 s. **No amp ever answers it** — it probes for unrelated Lantronix hardware. It is not discovery and needs no broadcast relay.
+
+A capture on Control is still useful to *document* VuNET groups for operators. See [`capture-playbook.md`](capture-playbook.md).
 
 ---
 

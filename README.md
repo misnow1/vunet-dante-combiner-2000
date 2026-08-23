@@ -31,6 +31,7 @@ A portable Linux gateway so one control client (laptop or tablet) on the **Marti
 | [`config/site.example.yaml`](config/site.example.yaml) | **Default** — audio trunk: untagged Dante (PVID), tagged Control |
 | [`config/site.tagged-trunk.example.yaml`](config/site.tagged-trunk.example.yaml) | Fully tagged trunk (no untagged VLAN on the port) |
 | [`config/site.lab-flat.example.yaml`](config/site.lab-flat.example.yaml) | Lab: optional untagged Mgmt on a flat LAN |
+| [`config/site.dante-client.example.yaml`](config/site.dante-client.example.yaml) | Clients on **Dante** (full Dante Controller); Martin VU-NET reflected instead |
 | [`deploy/pi/README.md`](deploy/pi/README.md) | Installer internals and troubleshooting |
 | [`cmd/combiner/`](cmd/combiner/) | Reflector + status HTTP service |
 | [`cmd/combiner-status/`](cmd/combiner-status/) | CLI health snapshot |

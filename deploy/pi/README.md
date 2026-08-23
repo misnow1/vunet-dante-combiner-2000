@@ -210,6 +210,30 @@ sudo conntrack -F || true
 `conntrack -F` is required, not optional: NAT is applied to a flow's first
 packet, so established entries keep the old mapping until they expire.
 
+### Moving clients to Dante (`client_vlan`)
+
+Dante Controller needs L2 adjacency for the metering tab and device config;
+SNAT carries discovery and some control but cannot provide those. When the
+operator needs full Dante Controller, put the clients on Dante Primary and let
+the combiner carry Martin VU-NET the other way instead — see
+[`config/site.dante-client.example.yaml`](../../config/site.dante-client.example.yaml).
+
+`client_vlan` (default `control`) moves three things:
+
+- which VLAN the reflector treats as the client side
+- the direction of the unicast forward rule
+- the SNAT target (peer devices always see an on-subnet source)
+
+It deliberately does **not** move the PTP/AES67/ATP denies. Those stay anchored
+to Control, because they exist to keep the amp stack quiet. If they followed
+`client_vlan` the combiner would start dropping PTP toward Dante and break the
+clock of the network it is meant to carry — a silent audio failure that looks
+nothing like a config error. `deploy/pi/tests/test_generators.py` guards this.
+
+Allowlists name the **peer** role, so a `vlan: control` allowlist is legal only
+when `client_vlan: dante`, and vice versa. Reflecting the client VLAN onto
+itself is rejected at load.
+
 ### Checking for drift
 
 `combiner -check` compares the ruleset actually loaded in the kernel against

@@ -24,3 +24,7 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 .eggs/
+
+# Packet captures — debugging artifacts, often tens of MB
+*.pcap
+*.pcapng

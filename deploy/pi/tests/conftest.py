@@ -54,3 +54,9 @@ def site_tagged_trunk() -> Path:
 @pytest.fixture
 def site_lab_flat() -> Path:
     return CONFIG_DIR / "site.lab-flat.example.yaml"
+
+
+@pytest.fixture
+def site_dante_client() -> Path:
+    """Control clients on Dante Primary; Martin VU-NET reflected the other way."""
+    return CONFIG_DIR / "site.dante-client.example.yaml"

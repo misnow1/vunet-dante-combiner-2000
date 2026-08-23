@@ -25,6 +25,7 @@ SITE_KEYS = frozenset(
         "hostname",
         "physical_interface",
         "status_listen",
+        "client_vlan",
         "vlans",
         "mgmt_dhcp",
         "management_access",

@@ -1,8 +1,29 @@
-# VuNET / Martin Audio — NOT loaded by the combiner.
-# Clients share the Control VLAN with the amps (native L2). Do not add
-# reflector groups here; allowlist vlan must be dante (see dante.yaml / shure.yaml).
-# Optional capture notes: docs/capture-playbook.md and docs/protocols.md.
+# Martin VU-NET / Linea Research amp discovery.
+#
+# Only loaded when the control clients sit on Dante (client_vlan: dante) and
+# the amps are the reflected peer. Under the default control-client profile
+# clients already share Control with the amps natively — reflecting this group
+# would hairpin Control onto itself, and config rejects it.
+#
+# Measured on a live rig (12 WPC amps, capture 2026-08-23):
+#   amps  -> 239.254.10.2:6002 and :54077, 91-byte, src port == dst port, TTL 1
+#   VU-NET-> 239.254.10.2:6002 and :54077, 23-byte, ephemeral src port, TTL 1
+# Query/response both ride the group, so direction must be both.
+#
+# VU-NET also broadcasts a Lantronix probe (00 00 00 F6 to 255.255.255.255:30718)
+# roughly every 3.4 s. No amp ever answers it — it is a probe for unrelated
+# Lantronix hardware. It is NOT discovery and needs no relay.
+#
+# TTL 1 is not a problem: the reflector re-originates rather than forwarding.
 
 name: vunet
-vlan: dante
-groups: []
+vlan: control
+groups:
+  - name: vunet-discovery
+    address: 239.254.10.2
+    ports:
+      - 6002
+      - 54077
+    proto: udp
+    direction: both
+    notes: Martin VU-NET / Linea Research amp discovery (TTL 1)

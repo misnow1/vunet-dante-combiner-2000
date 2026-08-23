@@ -15,17 +15,24 @@ import (
 )
 
 type Site struct {
-	Hostname          string      `yaml:"hostname"`
-	PhysicalInterface string      `yaml:"physical_interface"`
-	StatusListen      string      `yaml:"status_listen"`
-	VLANs             VLANs       `yaml:"vlans"`
-	MgmtDHCP          MgmtDHCP    `yaml:"mgmt_dhcp"`
-	ManagementAccess  []string    `yaml:"management_access"`
-	AllowlistFiles    []string    `yaml:"allowlist_files"`
-	DenyPrefixes      []string    `yaml:"deny_multicast_prefixes"`
-	DanteUnicastUDP   []int       `yaml:"dante_unicast_udp_ports"`
-	Allowlists        []Allowlist `yaml:"-"`
-	ConfigDir         string      `yaml:"-"`
+	Hostname          string `yaml:"hostname"`
+	PhysicalInterface string `yaml:"physical_interface"`
+	StatusListen      string `yaml:"status_listen"`
+	// ClientVLAN names the role the control clients (laptop/tablet) sit on.
+	// Defaults to control. Set to dante when the controller must be L2-adjacent
+	// to Dante devices — Dante Controller needs adjacency for metering and
+	// device config, which SNAT cannot provide. Reflection and the unicast
+	// forward/SNAT path both follow this; the PTP/media denies do NOT — they
+	// stay anchored to Control, which is where the amps live.
+	ClientVLAN       string      `yaml:"client_vlan"`
+	VLANs            VLANs       `yaml:"vlans"`
+	MgmtDHCP         MgmtDHCP    `yaml:"mgmt_dhcp"`
+	ManagementAccess []string    `yaml:"management_access"`
+	AllowlistFiles   []string    `yaml:"allowlist_files"`
+	DenyPrefixes     []string    `yaml:"deny_multicast_prefixes"`
+	DanteUnicastUDP  []int       `yaml:"dante_unicast_udp_ports"`
+	Allowlists       []Allowlist `yaml:"-"`
+	ConfigDir        string      `yaml:"-"`
 }
 
 type VLANs struct {
@@ -88,7 +95,7 @@ func (d MgmtDHCP) IsEnabled() bool {
 
 type Allowlist struct {
 	Name   string       `yaml:"name"`
-	VLAN   string       `yaml:"vlan"` // dante only
+	VLAN   string       `yaml:"vlan"` // any configured role except the client VLAN
 	Groups []AllowGroup `yaml:"groups"`
 }
 
@@ -202,7 +209,7 @@ func LoadSite(path string) (*Site, error) {
 		if !filepath.IsAbs(p) {
 			p = filepath.Join(s.ConfigDir, rel)
 		}
-		al, err := loadAllowlist(p)
+		al, err := loadAllowlist(p, s.PeerRole())
 		if err != nil {
 			return nil, fmt.Errorf("allowlist %s: %w", p, err)
 		}
@@ -247,7 +254,7 @@ func normalizeDenyPrefixes(raw []string) ([]string, error) {
 	return out, nil
 }
 
-func loadAllowlist(path string) (*Allowlist, error) {
+func loadAllowlist(path string, peerRole string) (*Allowlist, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -257,8 +264,10 @@ func loadAllowlist(path string) (*Allowlist, error) {
 		return nil, err
 	}
 	role := strings.ToLower(al.VLAN)
-	if role != "dante" {
-		return nil, fmt.Errorf("vlan must be dante (Control-native protocols are not reflected), got %q", al.VLAN)
+	// Only the peer VLAN may be reflected. Reflecting the client VLAN would
+	// hairpin it onto itself; the peer role follows client_vlan.
+	if role != peerRole {
+		return nil, fmt.Errorf("vlan must be %s (the client VLAN is not reflected onto itself), got %q", peerRole, al.VLAN)
 	}
 	al.VLAN = role
 	for i := range al.Groups {
@@ -355,6 +364,13 @@ func (s *Site) HasMgmt() bool {
 func (s *Site) validate() error {
 	if s.PhysicalInterface == "" {
 		return fmt.Errorf("physical_interface required")
+	}
+	// mgmt is a lab uplink, never where control clients live, so it is not a
+	// legal client_vlan.
+	switch strings.ToLower(s.ClientVLAN) {
+	case "", "control", "dante":
+	default:
+		return fmt.Errorf("client_vlan: unknown role %q (want control|dante)", s.ClientVLAN)
 	}
 	vlans := []struct {
 		name     string
@@ -482,19 +498,63 @@ func (s *Site) validate() error {
 	return nil
 }
 
-// PeerIface returns the production-side interface for an allowlist vlan role.
-func (s *Site) PeerIface(role string) (string, error) {
-	phys := s.PhysicalInterface
-	switch strings.ToLower(role) {
-	case "dante":
-		return s.VLANs.Dante.Iface(phys), nil
-	default:
-		return "", fmt.Errorf("unknown vlan role %q (want dante)", role)
+// ClientRole is the VLAN role the control clients sit on, defaulting to
+// control when client_vlan is unset.
+func (s *Site) ClientRole() string {
+	if s.ClientVLAN == "" {
+		return "control"
 	}
+	return strings.ToLower(s.ClientVLAN)
 }
 
+// PeerRole is the production VLAN opposite the client — the side whose
+// protocols get reflected onto the client VLAN.
+func (s *Site) PeerRole() string {
+	if s.ClientRole() == "dante" {
+		return "control"
+	}
+	return "dante"
+}
+
+// vlanForRole returns the VLAN struct for a role name.
+func (s *Site) vlanForRole(role string) (VLAN, bool) {
+	switch strings.ToLower(role) {
+	case "control":
+		return s.VLANs.Control, true
+	case "dante":
+		return s.VLANs.Dante, true
+	case "mgmt":
+		return s.VLANs.Mgmt, s.HasMgmt()
+	}
+	return VLAN{}, false
+}
+
+// PeerIface returns the production-side interface for an allowlist vlan role.
+// The client VLAN is not a legal peer: reflecting a role onto itself would
+// hairpin that VLAN back onto itself.
+func (s *Site) PeerIface(role string) (string, error) {
+	role = strings.ToLower(role)
+	if role == s.ClientRole() {
+		return "", fmt.Errorf("vlan %q is the client VLAN — it cannot also be a reflector peer", role)
+	}
+	v, ok := s.vlanForRole(role)
+	if !ok {
+		return "", fmt.Errorf("unknown or unconfigured vlan role %q (want %s)", role, s.PeerRole())
+	}
+	return v.Iface(s.PhysicalInterface), nil
+}
+
+// ClientIface is the interface control clients live on.
 func (s *Site) ClientIface() string {
-	return s.VLANs.Control.Iface(s.PhysicalInterface)
+	v, _ := s.vlanForRole(s.ClientRole())
+	return v.Iface(s.PhysicalInterface)
+}
+
+// PeerAddress is the combiner address unicast is SNATed to on the peer side,
+// so peer devices see an on-subnet source.
+func (s *Site) PeerAddress() string {
+	v, _ := s.vlanForRole(s.PeerRole())
+	return v.Address
 }
 
 func (s *Site) MgmtIface() string {

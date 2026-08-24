@@ -155,9 +155,22 @@ ExecStart=/usr/bin/ssh-keygen -A
 [Install]
 WantedBy=sysinit.target
 EOF
-  # An earlier version of this script shipped a drop-in that could never work.
+  # An earlier version shipped an ExecStartPre drop-in that could never work,
+  # because drop-in ExecStartPre= lines are APPENDED — after ssh.service's own
+  # `sshd -t`, which has already failed. Remove it if a card still carries one.
   rm -f /etc/systemd/system/ssh.service.d/10-combiner-hostkeys.conf
-  rmdir /etc/systemd/system/ssh.service.d 2>/dev/null || true
+
+  # A drop-in IS the right tool for [Unit] dependencies, which merge additively:
+  # this makes ssh.service pull the generator in rather than relying on
+  # sysinit.target ordering alone.
+  mkdir -p /etc/systemd/system/ssh.service.d
+  cat >/etc/systemd/system/ssh.service.d/10-combiner-wants-hostkeys.conf <<'EOF'
+# Installed by combiner-seal: sshd cannot start without host keys, so make it
+# depend on the unit that guarantees they exist.
+[Unit]
+Wants=combiner-hostkeys.service
+After=combiner-hostkeys.service
+EOF
   systemctl daemon-reload
   systemctl enable combiner-hostkeys.service >/dev/null 2>&1
 }

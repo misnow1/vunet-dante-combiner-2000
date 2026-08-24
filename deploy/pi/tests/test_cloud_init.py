@@ -337,6 +337,10 @@ def test_seal_does_not_use_an_ssh_service_dropin() -> None:
     text = SEAL.read_text()
     assert "rm -f /etc/systemd/system/ssh.service.d/10-combiner-hostkeys.conf" in text
     assert "ExecStartPre=-/usr/bin/ssh-keygen" not in text
+    # [Unit] dependencies DO merge additively, so a drop-in is the right tool
+    # for making ssh pull the generator in — just not for ExecStartPre.
+    assert "Wants=combiner-hostkeys.service" in text
+    assert "After=combiner-hostkeys.service" in text
 
 
 def test_seal_refuses_to_run_unconfirmed() -> None:

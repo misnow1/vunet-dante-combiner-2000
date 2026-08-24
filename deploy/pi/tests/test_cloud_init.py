@@ -162,3 +162,22 @@ def test_no_key_drops_the_placeholder_instead_of_installing_it(tmp_path: Path) -
     assert r.returncode == 0, r.stderr
     data = yaml.safe_load((tmp_path / "card" / "user-data").read_text())
     assert "ssh_authorized_keys" not in data["users"][0]
+
+
+def test_ssh_service_is_enabled_before_provisioning(user_data: dict[str, Any]) -> None:
+    """Pi OS ships sshd disabled, and replacing Imager's user-data drops whatever
+    it did about that. Enabling it must come FIRST, so a unit whose provisioning
+    fails is still reachable — which is exactly when you need to get into it."""
+    flat = [" ".join(c) if isinstance(c, list) else c for c in user_data["runcmd"]]
+    assert any("ssh" in c and "systemctl enable" in c for c in flat), flat
+    ssh_at = next(i for i, c in enumerate(flat) if "systemctl enable" in c)
+    boot_at = next(i for i, c in enumerate(flat) if "combiner-firstboot.sh" in c)
+    assert ssh_at < boot_at, "ssh must be enabled before provisioning can fail"
+
+
+def test_prep_card_writes_the_ssh_marker(tmp_path: Path) -> None:
+    """sshswitch.service enables sshd from this marker, covering a boot that
+    never reaches runcmd."""
+    r = _prep_card(tmp_path, "--password-hash", GOOD_HASH)
+    assert r.returncode == 0, r.stderr
+    assert (tmp_path / "card" / "ssh").exists()

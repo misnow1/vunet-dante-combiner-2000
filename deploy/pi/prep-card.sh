@@ -16,6 +16,7 @@ CARD=""
 SITE=""
 SSH_KEY=""
 USER_DATA=""
+CHECK_CARD=0
 ASK_PASSWORD=0
 PASSWORD_FILE=""
 PASSWORD_HASH=""
@@ -41,12 +42,15 @@ usage: prep-card.sh --site FILE [options]
   --version V        release to stage/pin (default: the version this tree ships)
   --no-tarball       do not stage a release tarball; the Pi downloads it on
                      first boot, which then requires Internet at the bench
+  --check-card       re-validate the combiner-site.yaml already on the card and
+                     exit, changing nothing (run this after hand-editing it)
   --force            skip config validation (not recommended)
   -h, --help         this text
 
 examples:
   ./deploy/pi/prep-card.sh --site my-venue.yaml --ssh-key ~/.ssh/id_ed25519.pub
   ./deploy/pi/prep-card.sh --site my-venue.yaml --ask-password
+  ./deploy/pi/prep-card.sh --check-card
 USAGE
 }
 
@@ -61,6 +65,7 @@ while [[ $# -gt 0 ]]; do
     --card)      CARD="${2:?--card needs a directory}"; shift 2 ;;
     --version)   VERSION="${2:?--version needs a value}"; shift 2 ;;
     --no-tarball) STAGE_TARBALL=0; shift ;;
+    --check-card) CHECK_CARD=1; shift ;;
     --force)     FORCE=1; shift ;;
     -h|--help)   usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 1 ;;
@@ -69,8 +74,10 @@ done
 
 die() { echo "error: $*" >&2; exit 1; }
 
-[[ -n "$SITE" ]] || { usage >&2; die "--site is required"; }
-[[ -f "$SITE" ]] || die "no such site config: $SITE"
+if [[ "$CHECK_CARD" -eq 0 ]]; then
+  [[ -n "$SITE" ]] || { usage >&2; die "--site is required"; }
+  [[ -f "$SITE" ]] || die "no such site config: $SITE"
+fi
 VERSION="${VERSION#v}"
 
 # --- locate the boot partition ---------------------------------------------
@@ -110,22 +117,42 @@ find_combiner() {
   return 1
 }
 
-if [[ "$FORCE" -eq 1 ]]; then
-  echo "warning: --force — skipping config validation" >&2
-elif COMBINER_BIN="$(find_combiner)"; then
+validate_site_config() {
+  local site="$1" bin stage
+  bin="$(find_combiner)" || die "no combiner binary to validate with (looked in bin/, PATH,
+and tried go build). Build one with 'make build', or re-run with --force."
   # Validate against a staged copy so allowlist_files resolve the way they will
   # on the Pi, where install.sh puts allowlists next to site.yaml.
-  STAGE="$(mktemp -d)"
-  trap 'rm -rf "$STAGE"' EXIT
-  mkdir -p "$STAGE/allowlists"
-  cp "$SITE" "$STAGE/site.yaml"
-  cp -a "$ROOT/config/allowlists/." "$STAGE/allowlists/"
-  echo "validating $SITE"
-  "$COMBINER_BIN" -check -config "$STAGE/site.yaml" ||
-    die "site config failed validation — fix it before writing the card"
+  stage="$(mktemp -d)"
+  mkdir -p "$stage/allowlists"
+  cp "$site" "$stage/site.yaml"
+  cp -a "$ROOT/config/allowlists/." "$stage/allowlists/"
+  echo "validating $site"
+  local rc=0
+  "$bin" -check -config "$stage/site.yaml" || rc=$?
+  rm -rf "$stage"
+  return "$rc"
+}
+
+# --check-card: re-check what is already staged and stop. This is the gap that
+# hand-editing combiner-site.yaml on the card opens — prep-card.sh validated
+# the source file, but nothing re-reads the card before the Pi boots.
+if [[ "$CHECK_CARD" -eq 1 ]]; then
+  CARD_SITE="$CARD/combiner-site.yaml"
+  [[ -f "$CARD_SITE" ]] || die "no combiner-site.yaml on $CARD — stage the card first"
+  if validate_site_config "$CARD_SITE"; then
+    echo ""
+    echo "OK: $CARD_SITE would be accepted by install.sh"
+    exit 0
+  fi
+  die "the config on the card would be REJECTED on first boot — fix it before booting"
+fi
+
+if [[ "$FORCE" -eq 1 ]]; then
+  echo "warning: --force — skipping config validation" >&2
 else
-  die "no combiner binary to validate with (looked in bin/, PATH, and tried go build)
-build one with 'make build', or re-run with --force to skip validation"
+  validate_site_config "$SITE" ||
+    die "site config failed validation — fix it before writing the card"
 fi
 
 # --- break-glass password ---------------------------------------------------
@@ -296,6 +323,11 @@ else
   install -m 0644 "$CLOUD_INIT/meta-data" "$CARD/meta-data"
   echo "wrote meta-data (Imager had not)"
 fi
+
+# Belt and braces with the runcmd in user-data: Raspberry Pi OS's sshswitch
+# service enables sshd when this marker exists, which covers a boot that never
+# reaches runcmd at all.
+touch "$CARD/ssh"
 
 # A log from a previous unit built on this card would be read as this one's.
 rm -f "$CARD/combiner-firstboot.log"

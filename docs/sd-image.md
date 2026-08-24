@@ -51,6 +51,7 @@ than on a dark unit in a rack.
 | `--card DIR` | boot partition, if autodetection picks wrong |
 | `--version V` | release to stage (default: the version this tree ships) |
 | `--no-tarball` | skip staging; the Pi downloads on first boot (needs Internet) |
+| `--check-card` | re-validate the config already on a card and exit, changing nothing |
 | `--force` | skip config validation |
 
 ### Break-glass password
@@ -102,6 +103,25 @@ To make the first boot work offline, also copy
 `vunet-dante-combiner-<version>-linux-arm64.tar.gz` and `SHA256SUMS` from
 [Releases](https://github.com/misnow1/vunet-dante-combiner-2000/releases) onto
 the same partition. Otherwise give the Pi Internet for its first boot.
+
+### If you hand-edit the card afterwards
+
+`prep-card.sh` validates the file it copies, not the copy on the card. If you
+edit `combiner-site.yaml` on the card afterwards — which is the normal way to
+adjust addresses — re-check it before booting:
+
+```bash
+./deploy/pi/prep-card.sh --check-card
+```
+
+That runs the same `combiner -check` the Pi will run, against the card, and
+changes nothing. Without it the first sign of a bad edit is a failed boot.
+
+A common one: `gateway` and `dns` are accepted **only on `mgmt`**, never on
+`control` or `dante`. Dante gear is meant to have no gateway — that is the
+whole reason the combiner SNATs. A Pi that needs its own uplink on a flat lab
+LAN gets it from an untagged `mgmt` VLAN, which is what
+[`site.lab-flat.example.yaml`](../config/site.lab-flat.example.yaml) is for.
 
 ## 3. Boot it
 

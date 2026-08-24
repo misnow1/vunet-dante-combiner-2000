@@ -64,6 +64,11 @@ packages:
   - conntrack
 
 runcmd:
+  # FIRST, and never allowed to fail the boot: Raspberry Pi OS ships sshd
+  # disabled, and replacing Imager's user-data drops whatever it did about
+  # that. Enabling it here means a unit whose provisioning FAILS is still
+  # reachable — which is exactly when you need to get into it.
+  - [sh, -c, "systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null || true"]
   - [bash, /boot/firmware/combiner-firstboot.sh]
 
 final_message: "combiner first boot finished after $UPTIME seconds — see combiner-firstboot.log on the boot partition"

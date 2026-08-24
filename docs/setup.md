@@ -140,8 +140,9 @@ anything — stage them with `--offline-debs DIR` ([`pi-prep.md`](pi-prep.md)).
 
 Building binaries yourself, the `virgil01` lab board, and Go: [`pi-prep.md`](pi-prep.md). Installer failure modes: [`../deploy/pi/README.md`](../deploy/pi/README.md).
 
-Flashing a pre-configured card instead of running the installer is planned, not
-yet available: [`sd-image.md`](sd-image.md).
+Prefer not to run the installer by hand? [`sd-image.md`](sd-image.md) prepares a
+card at the bench that provisions itself on first boot — validated before it is
+written, and offline-capable once the tarball is staged.
 
 ## 5. Check that it works
 

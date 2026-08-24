@@ -4,6 +4,9 @@ What `install.sh` does and how to recover when it fails. **Addresses, switch por
 
 Installs VLAN interfaces, optional lab Mgmt DHCP (`dnsmasq`), fail-closed `nftables`, and the `combiner` service on Debian / Raspberry Pi OS.
 
+`install.sh` is also what a self-provisioning card runs on first boot — see
+[`docs/sd-image.md`](../../docs/sd-image.md) and `cloud-init/` in this directory.
+
 ## Order of operations
 
 Everything that can reject the install happens **before** anything on the box
@@ -21,8 +24,16 @@ changes, so a failed run leaves no residue:
 5. Resolve runtime packages: skip `apt` entirely if nothing is missing, else
    install from `--offline-debs` or `apt`, else abort with the exact list.
 
-Only after all five does it load the module, disable `avahi`, write
-`/etc/combiner`, and rewrite networking.
+Only after all five does it load the module, disable `avahi`, install the
+binaries, and hand the config half to **`combiner-apply`**.
+
+`install.sh` does one-time OS preparation — apt, the 8021q module, masking
+`avahi`, installing binaries and units, disabling NetworkManager. Everything
+derived from `site.yaml` — the ruleset, networkd units, hostname, Mgmt DHCP,
+forwarding — lives in `combiner-apply`, which also runs on every boot from
+`combiner-apply.service`. An install and a later re-home therefore run exactly
+the same code, and a unit whose card gets a new config paves it over on the next
+power cycle. See [`docs/sd-image.md`](../../docs/sd-image.md).
 
 ## Prerequisites
 

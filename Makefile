@@ -1,4 +1,4 @@
-.PHONY: build build-pi build-pi-arm build-linux-amd64 package test test-py lint-py fmt fmt-check generate-check nft-check check
+.PHONY: shellcheck build build-pi build-pi-arm build-linux-amd64 package test test-py lint-py fmt fmt-check generate-check nft-check check
 
 # Version for stamped binaries and package names (e.g. v0.1.0 → 0.1.0).
 # Override: make package VERSION=0.1.0
@@ -52,14 +52,19 @@ package: build-pi build-pi-arm build-linux-amd64
 		cp config/site*.example.yaml "$$stage/config/"; \
 		cp -a config/allowlists "$$stage/config/"; \
 		cp deploy/pi/install.sh \
+			deploy/pi/prep-card.sh \
+			deploy/pi/combiner-apply.sh \
 			deploy/pi/generate-nftables.py \
 			deploy/pi/generate-nftables.sh \
 			deploy/pi/generate-network-config.py \
 			deploy/pi/site_config.py \
 			deploy/pi/README.md \
 			"$$stage/deploy/pi/"; \
-		cp -a deploy/pi/systemd "$$stage/deploy/pi/"; \
+		cp -a deploy/pi/systemd deploy/pi/cloud-init "$$stage/deploy/pi/"; \
 		chmod 755 "$$stage/deploy/pi/install.sh" \
+			"$$stage/deploy/pi/prep-card.sh" \
+			"$$stage/deploy/pi/combiner-apply.sh" \
+			"$$stage/deploy/pi/cloud-init/combiner-firstboot.sh" \
 			"$$stage/deploy/pi/generate-nftables.py" \
 			"$$stage/deploy/pi/generate-nftables.sh" \
 			"$$stage/deploy/pi/generate-network-config.py"; \
@@ -68,6 +73,18 @@ package: build-pi build-pi-arm build-linux-amd64
 	done
 	@cd "$(DIST)" && (command -v sha256sum >/dev/null && sha256sum $(PACKAGE_PREFIX)-linux-*.tar.gz || shasum -a 256 $(PACKAGE_PREFIX)-linux-*.tar.gz) > SHA256SUMS
 	@echo "ok: packages in $(DIST)/ (VERSION=$(VERSION))"
+
+# The installer and card-prep scripts only run for real on a Pi, so lint is the
+# main automated guard they get. Skip loudly rather than silently passing.
+shellcheck:
+	@if command -v shellcheck >/dev/null 2>&1; then \
+		shellcheck -S warning deploy/pi/install.sh deploy/pi/prep-card.sh \
+			deploy/pi/combiner-apply.sh \
+			deploy/pi/cloud-init/combiner-firstboot.sh deploy/pi/generate-nftables.sh; \
+		echo "shellcheck OK"; \
+	else \
+		echo "shellcheck not installed — skipped"; \
+	fi
 
 test:
 	go test ./...
@@ -121,4 +138,4 @@ nft-check:
 		echo "nft present but needs root — skipped nft -c (run: sudo make nft-check)"; \
 	fi
 
-check: fmt-check test test-py lint-py generate-check build build-pi build-pi-arm build-linux-amd64
+check: fmt-check test test-py lint-py shellcheck generate-check build build-pi build-pi-arm build-linux-amd64

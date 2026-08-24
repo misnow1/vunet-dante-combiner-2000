@@ -14,6 +14,7 @@ A portable Linux gateway so one control client (laptop or tablet) on the **Marti
 - **Drops** PTP / multicast media toward Control; does not trunk SoundGrid
 
 **Install a device:** [`docs/setup.md`](docs/setup.md) — addresses, switch ports, DHCP, Raspberry Pi software, and first checks.
+Or prepare a self-provisioning **microSD card** at the bench: [`docs/sd-image.md`](docs/sd-image.md).
 
 ## Docs
 
@@ -27,7 +28,7 @@ A portable Linux gateway so one control client (laptop or tablet) on the **Marti
 | [`docs/capture-playbook.md`](docs/capture-playbook.md) | Confirm Dante/Shure; capture Lake groups |
 | [`docs/break-glass.md`](docs/break-glass.md) | Combiner down |
 | [`docs/pi-prep.md`](docs/pi-prep.md) | Building binaries, Go, virgil01 lab board |
-| [`docs/sd-image.md`](docs/sd-image.md) | **Planned** — pre-configured microSD cards, read-only root |
+| [`docs/sd-image.md`](docs/sd-image.md) | Build a unit from a **microSD card** that provisions itself |
 | [`docs/productization.md`](docs/productization.md) | Future hardware (PoE, Sipeed) |
 | [`config/site.example.yaml`](config/site.example.yaml) | **Default** — audio trunk: untagged Dante (PVID), tagged Control |
 | [`config/site.tagged-trunk.example.yaml`](config/site.tagged-trunk.example.yaml) | Fully tagged trunk (no untagged VLAN on the port) |

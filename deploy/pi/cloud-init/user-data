@@ -1,0 +1,74 @@
+#cloud-config
+#
+# Combiner first-boot provisioning for Raspberry Pi OS (Trixie or newer).
+#
+# Copy this file to the FAT boot partition of a freshly flashed card, replacing
+# the user-data that Raspberry Pi Imager wrote. It must sit next to:
+#
+#   combiner-firstboot.sh    the provisioning script this file runs
+#   combiner-site.yaml       your site config (from config/site.example.yaml)
+#
+# On macOS/Linux, deploy/pi/prep-card.sh does all of that and validates the
+# config first. Full instructions: docs/sd-image.md
+#
+# The first boot needs Internet UNLESS you also stage a release tarball on the
+# boot partition (prep-card.sh does by default). After that the unit never
+# needs a network again.
+
+# ============================ EDIT THIS BLOCK ============================
+# Replacing Imager's user-data also replaces the login it configured, so the
+# account has to be defined here. Leaving the placeholder below gives you a
+# console-only box: provisioning still succeeds, but nothing can SSH in.
+
+hostname: combiner
+
+users:
+  - name: combiner
+    shell: /bin/bash
+    groups: [adm, sudo, dialout, plugdev, netdev]
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    # passwd: REPLACE_WITH_PASSWORD_HASH
+    ssh_authorized_keys:
+      - REPLACE_WITH_YOUR_SSH_PUBLIC_KEY
+
+# Break-glass password, for a laptop that has no SSH key on it. prep-card.sh
+# --ask-password sets all three of these for you. By hand: uncomment the passwd
+# line above and paste a hash from `openssl passwd -6` (NOT the password
+# itself), set lock_passwd to false, and set ssh_pwauth to true here.
+#
+# The hash lands on the card's FAT partition, which anyone holding the card can
+# read, so use a password you are willing to have cracked offline and do not
+# reuse one from elsewhere. SSH stays reachable only from the VLANs named by
+# management_access in site.yaml (Control by default).
+ssh_pwauth: false
+
+# Console keyboard/locale. Harmless to leave as-is on a headless unit.
+# keyboard:
+#   layout: us
+# locale: en_US.UTF-8
+# timezone: America/New_York
+
+# ========================== END OF EDIT BLOCK ===========================
+
+preserve_hostname: false
+
+# Installed while the bench network is still up. install.sh probes for these
+# and skips apt entirely when they are already present, so the provisioning
+# run below does not need a mirror.
+package_update: true
+packages:
+  - nftables
+  - python3-yaml
+  - iproute2
+  - conntrack
+
+runcmd:
+  # FIRST, and never allowed to fail the boot: Raspberry Pi OS ships sshd
+  # disabled, and replacing Imager's user-data drops whatever it did about
+  # that. Enabling it here means a unit whose provisioning FAILS is still
+  # reachable — which is exactly when you need to get into it.
+  - [sh, -c, "systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null || true"]
+  - [bash, /boot/firmware/combiner-firstboot.sh]
+
+final_message: "combiner first boot finished after $UPTIME seconds — see combiner-firstboot.log on the boot partition"

@@ -29,6 +29,11 @@ jobs:
         run: |
           test -z "$(gofmt -l .)" || (echo "gofmt needed:" && gofmt -l . && exit 1)
 
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          make shellcheck
+
       - name: go test
         run: go test ./...
 

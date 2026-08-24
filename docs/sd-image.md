@@ -256,6 +256,52 @@ SSH host keys must be generated during first boot, **before** the overlay is
 enabled, so they land in the persistent lower layer and the unit's identity is
 stable across reboots.
 
+## Making spare cards
+
+A spare is not a freshly flashed card: packages and binaries live on the card's
+root filesystem, so every spare has to have been provisioned. Doing that once
+and cloning is the efficient path.
+
+```bash
+# On a provisioned, verified unit — as the LAST thing before powering it off:
+sudo combiner-seal --poweroff
+```
+
+Then image the card and write copies:
+
+```bash
+sudo dd if=/dev/diskN of=combiner-golden.img bs=4m status=progress
+```
+
+Give each copy its own `combiner-site.yaml` on the boot partition
+(`prep-card.sh --site <rig>.yaml`, then `--check-card`) and boot it.
+`combiner-apply` paves that config in on first boot.
+
+**What sealing clears** is everything a `dd` clone would otherwise share across
+the fleet:
+
+| Cleared | Why it matters |
+| --- | --- |
+| `/etc/machine-id` (truncated) | systemd-networkd derives its DHCP DUID from it, so clones collide on leases. An empty file is also what makes systemd treat the next boot as a first boot |
+| `/etc/ssh/ssh_host_*` | otherwise every unit presents one identity, and one compromised card is all of them |
+| `/var/lib/systemd/random-seed` | a shared seed means every clone starts from the same entropy |
+| `/etc/combiner/site.yaml` | so a clone whose card is missing a config fails loudly instead of silently coming up on the golden unit's addressing |
+| journal, logs, histories, leases | one unit's history should not appear on every unit |
+
+**What sealing keeps** is the point of cloning: packages, binaries, units, and
+cloud-init's record that provisioning already happened. A clone must not try to
+re-provision — that needs a mirror it will not have.
+
+Host keys and machine-id regenerate uniquely on each clone's first boot.
+Raspberry Pi OS does that via `regenerate_ssh_host_keys.service`, which fires on
+`ConditionFirstBoot`; sealing also installs an `ssh.service` drop-in running
+`ssh-keygen -A` so a clone can never come up with no host keys and therefore no
+SSH.
+
+Run `combiner-seal --dry-run` first if you want to see the list without
+changing anything. Do not boot a sealed card expecting it to work — it has no
+config; re-stage it or image it.
+
 ## Updating a racked unit
 
 With a read-only root and no uplink, the honest answer is usually **swap the

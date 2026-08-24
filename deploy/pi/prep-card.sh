@@ -332,14 +332,16 @@ install -m 0644 "$STAGED_USER_DATA" "$CARD/user-data"
 install -m 0644 "$SITE"             "$CARD/combiner-site.yaml"
 install -m 0644 "$CLOUD_INIT/combiner-firstboot.sh" "$CARD/combiner-firstboot.sh"
 
-# Imager writes meta-data itself; only supply one if it did not, since NoCloud
-# needs it present to treat the partition as a datasource.
-if [[ -f "$CARD/meta-data" ]]; then
-  echo "keeping Imager's meta-data"
-else
-  install -m 0644 "$CLOUD_INIT/meta-data" "$CARD/meta-data"
-  echo "wrote meta-data (Imager had not)"
-fi
+# cloud-init runs per-instance modules — users, runcmd, everything that
+# provisions this box — exactly ONCE per instance-id, and Imager's meta-data
+# pins a fixed one. Re-staging a card that has already booted would then be
+# silently inert: no runcmd, no provisioning, no log, while SSH still works off
+# the marker above and the old account lingers. So stamp a fresh id on every
+# stage; that is what makes re-staging mean "provision again".
+INSTANCE_ID="combiner-$(date -u +%Y%m%d%H%M%S)-$$"
+printf 'instance-id: %s\nlocal-hostname: combiner\n' "$INSTANCE_ID" >"$CARD/meta-data"
+chmod 644 "$CARD/meta-data"
+echo "meta-data: instance-id $INSTANCE_ID (forces a full re-provision)"
 
 # Belt and braces with the runcmd in user-data: Raspberry Pi OS's sshswitch
 # service enables sshd when this marker exists, which covers a boot that never

@@ -209,3 +209,29 @@ def test_bad_username_is_refused(tmp_path: Path, bad: str) -> None:
     well as fail useradd."""
     r = _prep_card(tmp_path, "--password-hash", GOOD_HASH, "--user", bad)
     assert r.returncode != 0, f"accepted {bad!r}"
+
+
+def test_staging_overwrites_a_stale_instance_id(tmp_path: Path) -> None:
+    """cloud-init runs users/runcmd once per instance-id. Keeping Imager's fixed
+    id makes re-staging an already-booted card silently inert — no provisioning,
+    no log — so every stage must claim a new instance."""
+    card = tmp_path / "card"
+    card.mkdir()
+    (card / "config.txt").touch()
+    (card / "meta-data").write_text("instance-id: rpi-imager-1787532598498\n")
+
+    r = _prep_card(tmp_path, "--password-hash", GOOD_HASH)
+    assert r.returncode == 0, r.stderr
+    meta = yaml.safe_load((card / "meta-data").read_text())
+    assert meta["instance-id"] != "rpi-imager-1787532598498"
+    assert meta["instance-id"].startswith("combiner-")
+
+
+def test_each_stage_claims_a_new_instance(tmp_path: Path) -> None:
+    first = _prep_card(tmp_path, "--password-hash", GOOD_HASH)
+    assert first.returncode == 0, first.stderr
+    one = yaml.safe_load((tmp_path / "card" / "meta-data").read_text())["instance-id"]
+    second = _prep_card(tmp_path, "--password-hash", GOOD_HASH)
+    assert second.returncode == 0, second.stderr
+    two = yaml.safe_load((tmp_path / "card" / "meta-data").read_text())["instance-id"]
+    assert one != two

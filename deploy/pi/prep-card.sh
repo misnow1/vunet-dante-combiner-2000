@@ -16,6 +16,7 @@ CARD=""
 SITE=""
 SSH_KEY=""
 USER_DATA=""
+LOGIN_USER=""
 CHECK_CARD=0
 ASK_PASSWORD=0
 PASSWORD_FILE=""
@@ -31,6 +32,7 @@ usage: prep-card.sh --site FILE [options]
   --site FILE        site config to install as combiner-site.yaml (required)
   --ssh-key FILE     public key to authorise, e.g. ~/.ssh/id_ed25519.pub
                      (substituted into the shipped user-data template)
+  --user NAME        login to create (default: combiner)
   --user-data FILE   use your own already-edited user-data instead of --ssh-key
 
   break-glass password (for a laptop with no SSH key on it) — pick one:
@@ -58,6 +60,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --site)      SITE="${2:?--site needs a file}"; shift 2 ;;
     --ssh-key)   SSH_KEY="${2:?--ssh-key needs a file}"; shift 2 ;;
+    --user)      LOGIN_USER="${2:?--user needs a name}"; shift 2 ;;
     --user-data) USER_DATA="${2:?--user-data needs a file}"; shift 2 ;;
     --ask-password) ASK_PASSWORD=1; shift ;;
     --password-file) PASSWORD_FILE="${2:?--password-file needs a file}"; shift 2 ;;
@@ -244,6 +247,16 @@ if [[ -n "$USER_DATA" ]]; then
   SRC="$USER_DATA"
 fi
 
+if [[ -n "$LOGIN_USER" ]]; then
+  # Interpolated straight into user-data, so a name that is not a plain Linux
+  # username could break the YAML as well as fail useradd.
+  [[ "$LOGIN_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] ||
+    die "--user must be a lowercase Linux username (letters, digits, _ and -,
+starting with a letter or underscore, at most 32 characters): got '$LOGIN_USER'"
+fi
+HAVE_USER=0
+[[ -n "$LOGIN_USER" ]] && HAVE_USER=1
+
 KEY_LINE=""
 HAVE_KEY=0
 if [[ -n "$SSH_KEY" ]]; then
@@ -261,7 +274,11 @@ fi
 # placeholder would otherwise be installed as a literal, bogus key.
 awk -v key="$KEY_LINE" -v havekey="$HAVE_KEY" \
     -v hash="$PASSWORD_HASH" -v havepw="$HAVE_PW" \
+    -v user="$LOGIN_USER" -v haveuser="$HAVE_USER" \
     -v kph="$PLACEHOLDER" -v pph="$PW_PLACEHOLDER" -v q="'" '
+  haveuser == "1" && !userdone && /^[[:space:]]*-[[:space:]]*name:[[:space:]]/ {
+    print "  - name: " user; userdone = 1; next
+  }
   /^[[:space:]]*ssh_authorized_keys:[[:space:]]*$/ { held = $0; next }
   index($0, kph) {
     if (havekey == "1") {
@@ -338,7 +355,7 @@ cat <<EOF
 
 Card ready.
 
-  $CARD/user-data
+  $CARD/user-data          (login: ${LOGIN_USER:-combiner})
   $CARD/combiner-site.yaml
   $CARD/combiner-firstboot.sh
 

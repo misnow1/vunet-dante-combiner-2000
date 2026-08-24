@@ -44,6 +44,7 @@ than on a dark unit in a rack.
 | --- | --- |
 | `--site FILE` | required — installed on the card as `combiner-site.yaml` |
 | `--ssh-key FILE` | public key to authorise |
+| `--user NAME` | login to create (default: `combiner`) |
 | `--ask-password` | prompt for a break-glass password, twice, without echoing |
 | `--password-file F` | read that password from the first line of `F` |
 | `--password-hash H` | use an already-hashed password (or set `COMBINER_PASSWORD`) |

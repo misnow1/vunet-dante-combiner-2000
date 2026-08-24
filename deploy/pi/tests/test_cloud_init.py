@@ -181,3 +181,31 @@ def test_prep_card_writes_the_ssh_marker(tmp_path: Path) -> None:
     r = _prep_card(tmp_path, "--password-hash", GOOD_HASH)
     assert r.returncode == 0, r.stderr
     assert (tmp_path / "card" / "ssh").exists()
+
+
+def test_user_option_renames_the_login(tmp_path: Path) -> None:
+    r = _prep_card(tmp_path, "--password-hash", GOOD_HASH, "--user", "mpsllc")
+    assert r.returncode == 0, r.stderr
+    data = yaml.safe_load((tmp_path / "card" / "user-data").read_text())
+    assert data["users"][0]["name"] == "mpsllc"
+
+
+def test_user_option_leaves_hostname_alone(tmp_path: Path) -> None:
+    """Both default to 'combiner'; only the users entry may be rewritten, since
+    the real hostname comes from site.yaml when install.sh runs."""
+    r = _prep_card(tmp_path, "--password-hash", GOOD_HASH, "--user", "mpsllc")
+    assert r.returncode == 0, r.stderr
+    data = yaml.safe_load((tmp_path / "card" / "user-data").read_text())
+    assert data["hostname"] == "combiner"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["MPSLLC", "root:x", "1abc", "a b", 'has"quote', "x" * 33, "-lead"],
+    ids=["uppercase", "colon", "leading-digit", "space", "quote", "too-long", "leading-dash"],
+)
+def test_bad_username_is_refused(tmp_path: Path, bad: str) -> None:
+    """The name is interpolated into YAML, so a bad one could break the file as
+    well as fail useradd."""
+    r = _prep_card(tmp_path, "--password-hash", GOOD_HASH, "--user", bad)
+    assert r.returncode != 0, f"accepted {bad!r}"

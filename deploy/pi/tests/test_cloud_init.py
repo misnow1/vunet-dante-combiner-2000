@@ -343,3 +343,45 @@ def test_seal_refuses_to_run_unconfirmed() -> None:
     r = subprocess.run([str(SEAL), "--dry-run", "--help"], capture_output=True, text=True)
     assert r.returncode == 0
     assert "--yes" in r.stdout
+
+
+REAL_CMDLINE = (
+    "console=serial0,115200 console=tty1 root=PARTUUID=9710ec8c-02 rootfstype=ext4 "
+    "fsck.repair=yes rootwait quiet splash plymouth.ignore-serial-consoles "
+    "cfg80211.ieee80211_regdom=US ds=nocloud;i=rpi-imager-1787532598498\n"
+)
+
+
+def test_staging_repins_the_instance_id_on_the_kernel_cmdline(tmp_path: Path) -> None:
+    """Imager pins the instance-id as `ds=nocloud;i=<id>` on the kernel command
+    line, and that beats meta-data on the seed. Stamping meta-data alone is
+    silently ineffective — cloud-init keeps seeing the original instance and
+    never re-runs users or runcmd, so a re-staged card provisions nothing."""
+    card = tmp_path / "card"
+    card.mkdir()
+    (card / "config.txt").touch()
+    (card / "cmdline.txt").write_text(REAL_CMDLINE)
+
+    r = _prep_card(tmp_path, "--password-hash", GOOD_HASH)
+    assert r.returncode == 0, r.stderr
+
+    cmdline = (card / "cmdline.txt").read_text()
+    meta_id = yaml.safe_load((card / "meta-data").read_text())["instance-id"]
+    assert f"i={meta_id}" in cmdline, cmdline
+    assert "rpi-imager-1787532598498" not in cmdline
+    # A multi-line or mangled cmdline.txt makes the Pi unbootable.
+    assert cmdline.count("\n") <= 1
+    assert "root=PARTUUID=9710ec8c-02" in cmdline
+    assert "rootfstype=ext4" in cmdline
+    assert (card / "cmdline.txt.combiner-orig").exists()
+
+
+def test_staging_leaves_a_cmdline_without_nocloud_alone(tmp_path: Path) -> None:
+    card = tmp_path / "card"
+    card.mkdir()
+    (card / "config.txt").touch()
+    plain = "console=tty1 root=PARTUUID=abc-02 rootwait\n"
+    (card / "cmdline.txt").write_text(plain)
+    r = _prep_card(tmp_path, "--password-hash", GOOD_HASH)
+    assert r.returncode == 0, r.stderr
+    assert (card / "cmdline.txt").read_text() == plain

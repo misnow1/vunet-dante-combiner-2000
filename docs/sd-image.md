@@ -155,6 +155,15 @@ bench network, then replace the config before the unit is racked:
    is live and paves the new one over the old — no Internet, no console, no
    keyboard.
 
+### Re-staging really does re-provision
+
+cloud-init runs `users`, `runcmd` and everything else that provisions a box
+exactly **once per instance-id**, and Raspberry Pi Imager pins that id in two
+places: `meta-data` on the seed, and `ds=nocloud;i=<id>` on the **kernel command
+line**, where it takes precedence. `prep-card.sh` rewrites both, so re-staging a
+card genuinely means "provision this again". Changing only `meta-data` is
+silently ineffective — the card looks freshly staged and provisions nothing.
+
 `combiner-apply` runs on every boot from `combiner-apply.service` and compares
 the config it would generate against what is actually live. When they match it
 exits without restarting anything, so a normal boot costs nothing. It reads the

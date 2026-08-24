@@ -341,6 +341,34 @@ install -m 0644 "$CLOUD_INIT/combiner-firstboot.sh" "$CARD/combiner-firstboot.sh
 INSTANCE_ID="combiner-$(date -u +%Y%m%d%H%M%S)-$$"
 printf 'instance-id: %s\nlocal-hostname: combiner\n' "$INSTANCE_ID" >"$CARD/meta-data"
 chmod 644 "$CARD/meta-data"
+
+# Raspberry Pi Imager also pins the instance-id on the KERNEL COMMAND LINE, as
+# `ds=nocloud;i=<id>`, and that beats the meta-data file on the seed. Stamping
+# meta-data alone is silently ineffective: cloud-init keeps seeing Imager's
+# original id and never re-runs its per-instance modules, so a re-staged card
+# looks staged but provisions nothing.
+if [[ -f "$CARD/cmdline.txt" ]] && grep -q 'ds=nocloud' "$CARD/cmdline.txt"; then
+  [[ -f "$CARD/cmdline.txt.combiner-orig" ]] ||
+    cp "$CARD/cmdline.txt" "$CARD/cmdline.txt.combiner-orig"
+  # cmdline.txt must stay a single line; rewrite just the i= token in place.
+  CMDLINE_TMP="$(mktemp)"
+  awk -v id="$INSTANCE_ID" '{
+    if (match($0, /i=[^ ;]*/)) {
+      print substr($0, 1, RSTART - 1) "i=" id substr($0, RSTART + RLENGTH)
+    } else {
+      sub(/ds=nocloud/, "ds=nocloud;i=" id)
+      print
+    }
+  }' "$CARD/cmdline.txt" >"$CMDLINE_TMP"
+  if [[ "$(wc -l <"$CMDLINE_TMP")" -gt 1 ]]; then
+    rm -f "$CMDLINE_TMP"
+    die "refusing to write a multi-line cmdline.txt"
+  fi
+  cat "$CMDLINE_TMP" >"$CARD/cmdline.txt"
+  rm -f "$CMDLINE_TMP"
+  echo "cmdline.txt: pinned instance-id updated to match"
+fi
+
 echo "meta-data: instance-id $INSTANCE_ID (forces a full re-provision)"
 
 # Belt and braces with the runcmd in user-data: Raspberry Pi OS's sshswitch

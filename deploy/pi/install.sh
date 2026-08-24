@@ -238,6 +238,7 @@ done
 install -m 0755 "$BIN_DIR/combiner" /usr/local/bin/combiner
 install -m 0755 "$BIN_DIR/combiner-status" /usr/local/bin/combiner-status
 install -m 0755 "$ROOT/deploy/pi/combiner-apply.sh" /usr/local/sbin/combiner-apply
+install -m 0755 "$ROOT/deploy/pi/combiner-seal.sh" /usr/local/sbin/combiner-seal
 install -d /usr/local/lib/combiner
 install -m 0644 "$ROOT/deploy/pi/generate-nftables.py" \
                 "$ROOT/deploy/pi/generate-network-config.py" \

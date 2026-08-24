@@ -40,7 +40,7 @@ power cycle. See [`docs/sd-image.md`](../../docs/sd-image.md).
 - Raspberry Pi with GbE (Pi 4/5 recommended; Pi 3 OK for early lab)
 - Switch trunk and DHCP already set per **[`docs/setup.md`](../../docs/setup.md)**
 - **Local console** (serial/HDMI) recommended — install disables NetworkManager/dhcpcd
-- Edited `/etc/combiner/site.yaml` (start from `config/site.example.yaml` — audio trunk; or `site.tagged-trunk.example.yaml` / `site.lab-flat.example.yaml`)
+- Edited `/etc/combiner/site.yaml` (start from `config/site.example.yaml` — production audio trunk; or `site.lab-flat.example.yaml` for a flat lab LAN)
 
 ### Combiner DHCP (off by default)
 
@@ -106,7 +106,7 @@ tar -xzf combiner.tgz
 cd vunet-dante-combiner-VERSION-linux-arm64
 
 sudo mkdir -p /etc/combiner
-sudo cp config/site.example.yaml /etc/combiner/site.yaml   # or site.tagged-trunk / site.lab-flat
+sudo cp config/site.example.yaml /etc/combiner/site.yaml   # or site.lab-flat
 # edit /etc/combiner/site.yaml
 sudo ./deploy/pi/install.sh /etc/combiner/site.yaml --i-have-console
 ```
@@ -128,7 +128,7 @@ usage: install.sh [SITE_YAML] [--i-have-console] [--offline-debs DIR]
 
 ```bash
 sudo mkdir -p /etc/combiner
-sudo cp config/site.example.yaml /etc/combiner/site.yaml   # or site.tagged-trunk / site.lab-flat
+sudo cp config/site.example.yaml /etc/combiner/site.yaml   # or site.lab-flat
 sudo cp -r config/allowlists /etc/combiner/
 # edit /etc/combiner/site.yaml
 # ensure bin/combiner and bin/combiner-status exist (release package, make build-pi, or go on PATH)
@@ -258,7 +258,7 @@ Dante Controller needs L2 adjacency for the metering tab and device config;
 SNAT carries discovery and some control but cannot provide those. When the
 operator needs full Dante Controller, put the clients on Dante Primary and let
 the combiner carry Martin VU-NET the other way instead — see
-[`config/site.dante-client.example.yaml`](../../config/site.dante-client.example.yaml).
+[`config/site.example.yaml`](../../config/site.example.yaml).
 
 `client_vlan` (default `control`) moves three things:
 

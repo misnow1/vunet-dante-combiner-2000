@@ -20,6 +20,17 @@ DENY_MARKERS = [
 ]
 
 
+def _fully_tagged(dest: Path) -> Path:
+    """Apply the one-line change site.example.yaml documents for a combiner port
+    with no untagged/PVID VLAN. Deriving it here rather than shipping a third
+    profile keeps that comment's instructions under test."""
+    src = (REPO_ROOT / "config" / "site.example.yaml").read_text()
+    assert src.count("    untagged: true\n") == 1, "the documented edit no longer applies cleanly"
+    out = src.replace("    untagged: true\n", "    interface_name: eth0.201\n", 1)
+    dest.write_text(out)
+    return dest
+
+
 def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         cmd,
@@ -38,11 +49,12 @@ def test_nftables_audio_trunk_dante_untagged(tmp_path: Path) -> None:
     assert r.returncode == 0, r.stderr
     text = out.read_text()
 
-    # Control -> Dante crosses from the tagged VLAN out the physical NIC.
-    assert 'iifname "eth0.200" oifname "eth0" ip daddr != 224.0.0.0/4 accept' in text
+    # Clients are on Dante (the PVID), so unicast crosses eth0 -> eth0.200
+    # toward the amps, and is rewritten to the combiner's Control address.
+    assert 'iifname "eth0" oifname "eth0.200" ip daddr != 224.0.0.0/4 accept' in text
     assert 'oifname "eth0" ip saddr != 10.201.0.1' in text
     assert "snat to 10.201.0.1" in text
-    assert "snat to 10.200.0.1" not in text
+    assert "snat to 10.200.0.1" in text
     # Denies stay aimed at Control only — never at the untagged Dante face.
     assert 'oifname { "eth0.200" } ip daddr 224.0.1.129-224.0.1.132' in text
     assert "eth0.201" not in text
@@ -52,20 +64,23 @@ def test_nftables_audio_trunk_dante_untagged(tmp_path: Path) -> None:
     assert "policy drop" in text
     assert "ip daddr 224.0.0.0/4 counter name drop_forward_mcast drop" in text
     # management_access defaults to Control alone.
-    assert 'iifname { "eth0.200" } tcp dport { 22, 8080 } accept' in text
+    # Clients are on Dante, so Dante must reach SSH and the status page too —
+    # otherwise a field unit is console-only.
+    assert 'iifname { "eth0", "eth0.200" } tcp dport { 22, 8080 } accept' in text
 
 
 def test_nftables_tagged_trunk(tmp_path: Path) -> None:
-    site = REPO_ROOT / "config" / "site.tagged-trunk.example.yaml"
+    site = _fully_tagged(tmp_path / "site.yaml")
     out = tmp_path / "nftables.conf"
     r = _run([sys.executable, str(NFT_SCRIPT), str(site), str(out)])
     assert r.returncode == 0, r.stderr
     text = out.read_text()
 
-    assert 'iifname "eth0.200" oifname "eth0.201" ip daddr != 224.0.0.0/4 accept' in text
+    # Clients on Dante: eth0.201 -> eth0.200, both faces now tagged.
+    assert 'iifname "eth0.201" oifname "eth0.200" ip daddr != 224.0.0.0/4 accept' in text
     assert "drop_control_dante" not in text
     assert "snat to 10.201.0.1" in text
-    assert "snat to 10.200.0.1" not in text
+    assert "snat to 10.200.0.1" in text
     assert "eth0.209" not in text
     for p in DENY_MARKERS:
         assert p in text
@@ -75,15 +90,15 @@ def test_nftables_tagged_trunk(tmp_path: Path) -> None:
 
 
 def test_nftables_management_access_widens_input(tmp_path: Path) -> None:
-    src = (REPO_ROOT / "config" / "site.example.yaml").read_text()
-    site = tmp_path / "site.yaml"
-    site.write_text(src.replace("# management_access: [control, dante]", "management_access: [control, dante]"))
+    """Both shipped profiles name the client VLAN explicitly, so SSH and the
+    status page are reachable from where the operator actually is."""
+    site = REPO_ROOT / "config" / "site.example.yaml"
     out = tmp_path / "nftables.conf"
     r = _run([sys.executable, str(NFT_SCRIPT), str(site), str(out)])
     assert r.returncode == 0, r.stderr
     text = out.read_text()
 
-    assert 'iifname { "eth0.200", "eth0" } tcp dport { 22, 8080 } accept' in text
+    assert 'iifname { "eth0", "eth0.200" } tcp dport { 22, 8080 } accept' in text
 
 
 def test_nftables_rejects_two_untagged_vlans(tmp_path: Path) -> None:
@@ -110,7 +125,7 @@ def test_nftables_lab_flat_optional_mgmt(tmp_path: Path) -> None:
     assert r.returncode == 0, r.stderr
     text = out.read_text()
 
-    assert 'iifname "eth0.200" oifname "eth0.201"' in text
+    assert 'iifname "eth0.201" oifname "eth0.200"' in text
     assert 'iifname "eth0" oifname "eth0.200"' in text
     assert "snat to 10.200.0.1" in text
     assert "snat to 10.201.0.1" in text
@@ -148,7 +163,7 @@ def test_network_config_audio_trunk(tmp_path: Path) -> None:
 
 
 def test_network_config_tagged_trunk(tmp_path: Path) -> None:
-    site = REPO_ROOT / "config" / "site.tagged-trunk.example.yaml"
+    site = _fully_tagged(tmp_path / "site.yaml")
     out = tmp_path / "net"
     r = _run([sys.executable, str(NET_SCRIPT), str(site), str(out)])
     assert r.returncode == 0, r.stderr
@@ -180,8 +195,8 @@ def test_network_config_lab_flat(tmp_path: Path) -> None:
     trunk = (out / "systemd/network/10-combiner-trunk.network").read_text()
     assert not (out / "systemd/network/20-combiner-mgmt.netdev").exists()
     assert "Name=eth0" in trunk
-    assert "Address=192.168.1.2/24" in trunk
-    assert "Gateway=192.168.1.1" in trunk
+    assert "Address=192.168.33.212/24" in trunk
+    assert "Gateway=192.168.33.1" in trunk
     assert "VLAN=eth0.200" in trunk
     assert "VLAN=eth0.201" in trunk
     assert "VLAN=eth0.200 eth0.201" not in trunk
@@ -191,14 +206,14 @@ def test_network_config_lab_flat(tmp_path: Path) -> None:
     assert "control eth0.200" in ifaces
 
 
-def test_dante_client_inverts_unicast_and_snat(site_dante_client: Path, tmp_path: Path) -> None:
+def test_dante_client_inverts_unicast_and_snat(site_example: Path, tmp_path: Path) -> None:
     """client_vlan: dante reverses the unicast forward direction and the SNAT target.
 
     Dante-side clients must egress toward Control and be rewritten to the
     combiner's Control address, so Martin amps see an on-subnet peer.
     """
     out = tmp_path / "nftables.conf"
-    r = _run([sys.executable, str(NFT_SCRIPT), str(site_dante_client), str(out)])
+    r = _run([sys.executable, str(NFT_SCRIPT), str(site_example), str(out)])
     assert r.returncode == 0, r.stderr
     text = out.read_text()
 
@@ -211,7 +226,7 @@ def test_dante_client_inverts_unicast_and_snat(site_dante_client: Path, tmp_path
     assert "counter snat_to_control {}" in text
 
 
-def test_dante_client_keeps_denies_anchored_to_control(site_dante_client: Path, tmp_path: Path) -> None:
+def test_dante_client_keeps_denies_anchored_to_control(site_example: Path, tmp_path: Path) -> None:
     """The PTP/media denies must NOT follow client_vlan.
 
     They exist to keep PTP and media off the amp VLAN. If they tracked the
@@ -220,7 +235,7 @@ def test_dante_client_keeps_denies_anchored_to_control(site_dante_client: Path, 
     looks nothing like a config error.
     """
     out = tmp_path / "nftables.conf"
-    r = _run([sys.executable, str(NFT_SCRIPT), str(site_dante_client), str(out)])
+    r = _run([sys.executable, str(NFT_SCRIPT), str(site_example), str(out)])
     assert r.returncode == 0, r.stderr
     forward = out.read_text().split("chain forward")[1].split("chain postrouting")[0]
 
@@ -235,7 +250,7 @@ def test_dante_client_keeps_denies_anchored_to_control(site_dante_client: Path, 
 
 def test_client_vlan_rejects_unknown_role(tmp_path: Path, site_example: Path) -> None:
     bad = tmp_path / "site.yaml"
-    bad.write_text(site_example.read_text().replace("hostname: combiner", "hostname: combiner\nclient_vlan: mgmt"))
+    bad.write_text(site_example.read_text().replace("client_vlan: dante", "client_vlan: mgmt"))
     r = _run([sys.executable, str(NFT_SCRIPT), str(bad), str(tmp_path / "out.conf")])
     assert r.returncode != 0
     assert "client_vlan" in (r.stderr + r.stdout)

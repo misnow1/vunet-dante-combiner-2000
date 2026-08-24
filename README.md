@@ -30,10 +30,8 @@ Or prepare a self-provisioning **microSD card** at the bench: [`docs/sd-image.md
 | [`docs/pi-prep.md`](docs/pi-prep.md) | Building binaries, Go, virgil01 lab board |
 | [`docs/sd-image.md`](docs/sd-image.md) | Build a unit from a **microSD card** that provisions itself |
 | [`docs/productization.md`](docs/productization.md) | Future hardware (PoE, Sipeed) |
-| [`config/site.example.yaml`](config/site.example.yaml) | **Default** — audio trunk: untagged Dante (PVID), tagged Control |
-| [`config/site.tagged-trunk.example.yaml`](config/site.tagged-trunk.example.yaml) | Fully tagged trunk (no untagged VLAN on the port) |
+| [`config/site.example.yaml`](config/site.example.yaml) | **Production** — audio trunk: clients on untagged Dante (PVID), amps on tagged Control |
 | [`config/site.lab-flat.example.yaml`](config/site.lab-flat.example.yaml) | Lab: optional untagged Mgmt on a flat LAN |
-| [`config/site.dante-client.example.yaml`](config/site.dante-client.example.yaml) | Clients on **Dante** (full Dante Controller); Martin VU-NET reflected instead |
 | [`deploy/pi/README.md`](deploy/pi/README.md) | Installer internals and troubleshooting |
 | [`cmd/combiner/`](cmd/combiner/) | Reflector + status HTTP service |
 | [`cmd/combiner-status/`](cmd/combiner-status/) | CLI health snapshot |

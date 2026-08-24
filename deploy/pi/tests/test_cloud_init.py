@@ -389,3 +389,36 @@ def test_staging_leaves_a_cmdline_without_nocloud_alone(tmp_path: Path) -> None:
     r = _prep_card(tmp_path, "--password-hash", GOOD_HASH)
     assert r.returncode == 0, r.stderr
     assert (card / "cmdline.txt").read_text() == plain
+
+
+def test_cmdline_rewrite_only_touches_the_nocloud_parameter(tmp_path: Path) -> None:
+    """A cmdline carries other parameters that END in i=, e.g.
+    snd_bcm2835.enable_hdmi=1 contains the substring "i=1". Matching the first
+    bare i= would corrupt that parameter AND leave the real instance-id alone —
+    producing an unbootable Pi that also failed to re-provision."""
+    card = tmp_path / "card"
+    card.mkdir()
+    (card / "config.txt").touch()
+    (card / "cmdline.txt").write_text(
+        "console=tty1 snd_bcm2835.enable_hdmi=1 root=PARTUUID=abc-02 ds=nocloud;i=rpi-imager-123\n"
+    )
+    r = _prep_card(tmp_path, "--password-hash", GOOD_HASH)
+    assert r.returncode == 0, r.stderr
+
+    cmdline = (card / "cmdline.txt").read_text()
+    meta_id = yaml.safe_load((card / "meta-data").read_text())["instance-id"]
+    assert "snd_bcm2835.enable_hdmi=1" in cmdline, cmdline
+    assert f"ds=nocloud;i={meta_id}" in cmdline, cmdline
+    assert "rpi-imager-123" not in cmdline
+
+
+def test_cmdline_rewrite_preserves_other_nocloud_options(tmp_path: Path) -> None:
+    card = tmp_path / "card"
+    card.mkdir()
+    (card / "config.txt").touch()
+    (card / "cmdline.txt").write_text("root=PARTUUID=abc-02 ds=nocloud;s=/boot/firmware/;i=rpi-imager-123 quiet\n")
+    r = _prep_card(tmp_path, "--password-hash", GOOD_HASH)
+    assert r.returncode == 0, r.stderr
+    cmdline = (card / "cmdline.txt").read_text()
+    assert "s=/boot/firmware/" in cmdline, cmdline
+    assert cmdline.rstrip().endswith("quiet"), cmdline

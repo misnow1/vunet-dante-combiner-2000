@@ -352,11 +352,16 @@ if [[ -f "$CARD/cmdline.txt" ]] && grep -q 'ds=nocloud' "$CARD/cmdline.txt"; the
     cp "$CARD/cmdline.txt" "$CARD/cmdline.txt.combiner-orig"
   # cmdline.txt must stay a single line; rewrite just the i= token in place.
   CMDLINE_TMP="$(mktemp)"
+  # Rewrite ONLY the i= inside the ds=nocloud parameter. Matching the first
+  # bare "i=" on the line would be wrong: a cmdline can carry other parameters
+  # ending in i= (the firmware appends several), and corrupting one of those
+  # makes the Pi unbootable.
   awk -v id="$INSTANCE_ID" '{
-    if (match($0, /i=[^ ;]*/)) {
-      print substr($0, 1, RSTART - 1) "i=" id substr($0, RSTART + RLENGTH)
+    if (match($0, /ds=nocloud[^ ]*/)) {
+      ds = substr($0, RSTART, RLENGTH)
+      if (sub(/;i=[^ ;]*/, ";i=" id, ds) == 0) ds = ds ";i=" id
+      print substr($0, 1, RSTART - 1) ds substr($0, RSTART + RLENGTH)
     } else {
-      sub(/ds=nocloud/, "ds=nocloud;i=" id)
       print
     }
   }' "$CARD/cmdline.txt" >"$CMDLINE_TMP"

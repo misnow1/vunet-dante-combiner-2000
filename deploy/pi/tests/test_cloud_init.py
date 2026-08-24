@@ -313,9 +313,23 @@ def test_seal_forces_each_clone_to_carry_its_own_config() -> None:
 
 
 def test_seal_installs_a_host_key_safety_net() -> None:
-    """Host-key regeneration hangs off ConditionFirstBoot. If that ever fails to
-    fire, sshd will not start and the whole fleet is unreachable."""
-    assert "ssh-keygen -A" in SEAL.read_text()
+    """Pi OS gates host-key regeneration on ConditionFirstBoot, which was
+    observed NOT to fire on a sealed card — leaving a unit with no host keys, and
+    ssh.service fails its own `sshd -t` check when keys are missing. So sealing
+    installs an unconditional generator of its own."""
+    text = SEAL.read_text()
+    assert "combiner-hostkeys.service" in text
+    assert "ExecStart=/usr/bin/ssh-keygen -A" in text
+    assert "Before=ssh.service" in text
+
+
+def test_seal_does_not_use_an_ssh_service_dropin() -> None:
+    """A drop-in cannot work here: drop-in ExecStartPre= lines are APPENDED, so
+    they run after ssh.service's own `sshd -t`, which has already failed. Sealing
+    must remove any such drop-in, never add one."""
+    text = SEAL.read_text()
+    assert "rm -f /etc/systemd/system/ssh.service.d/10-combiner-hostkeys.conf" in text
+    assert "ExecStartPre=-/usr/bin/ssh-keygen" not in text
 
 
 def test_seal_refuses_to_run_unconfirmed() -> None:

@@ -293,10 +293,17 @@ cloud-init's record that provisioning already happened. A clone must not try to
 re-provision — that needs a mirror it will not have.
 
 Host keys and machine-id regenerate uniquely on each clone's first boot.
-Raspberry Pi OS does that via `regenerate_ssh_host_keys.service`, which fires on
-`ConditionFirstBoot`; sealing also installs an `ssh.service` drop-in running
-`ssh-keygen -A` so a clone can never come up with no host keys and therefore no
-SSH.
+Raspberry Pi OS ships `regenerate_ssh_host_keys.service` for this, but it is
+gated on `ConditionFirstBoot` — and on a sealed card that condition was observed
+**not** to fire, leaving the unit with no host keys at all. `ssh.service` runs
+`sshd -t` as its own `ExecStartPre`, which fails outright when keys are missing,
+so sshd never starts and the unit is unreachable.
+
+Sealing therefore installs `combiner-hostkeys.service`: a plain oneshot ordered
+`Before=ssh.service`, with no condition on it, running `ssh-keygen -A` (which
+only creates what is missing, so it is free on every later boot). A drop-in
+cannot substitute for this — drop-in `ExecStartPre=` lines are appended, so they
+run *after* the check that already failed.
 
 Run `combiner-seal --dry-run` first if you want to see the list without
 changing anything. Do not boot a sealed card expecting it to work — it has no

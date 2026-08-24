@@ -78,16 +78,17 @@ say "sealing (boot partition: $BOOT_DIR)"
 
 # --- identity ---------------------------------------------------------------
 # Truncate rather than delete: an EMPTY /etc/machine-id is systemd's documented
-# "not yet initialised" state, and it is what makes ConditionFirstBoot=yes true
-# on the next boot — which is what triggers Raspberry Pi OS's
-# regenerate_ssh_host_keys.service. /var/lib/dbus/machine-id is a symlink to
-# this file, so it is covered too.
+# "not yet initialised" state, so systemd generates a fresh one on next boot.
+# /var/lib/dbus/machine-id is a symlink to this file, so it is covered too.
+#
+# Note this does NOT reliably make ConditionFirstBoot=yes fire on Raspberry Pi
+# OS — a sealed card came up with the condition unmet and therefore no host
+# keys. Hence combiner-hostkeys.service below, which does not depend on it.
 do_step "truncate /etc/machine-id (also covers dbus, a symlink to it)" \
   truncate -s 0 /etc/machine-id
 
-# Removed here as well as by the regenerator, so a clone can never come up
-# presenting the golden unit's host identity even if that unit does not run.
-do_step "remove SSH host keys (regenerated uniquely on first boot)" \
+# A clone must never present the golden unit's host identity.
+do_step "remove SSH host keys (combiner-hostkeys.service regenerates them)" \
   bash -c 'rm -f /etc/ssh/ssh_host_*'
 
 # A shared seed means every clone starts from the same entropy.
@@ -123,22 +124,49 @@ do_step "clear shell histories and known_hosts" \
   bash -c 'rm -f /root/.bash_history /home/*/.bash_history /root/.ssh/known_hosts /home/*/.ssh/known_hosts 2>/dev/null || true'
 
 # --- safety net -------------------------------------------------------------
-# Raspberry Pi OS regenerates host keys via ConditionFirstBoot, which depends on
-# machine-id being empty. If anything ever populates machine-id before that
-# runs, a clone would boot with no host keys and sshd would refuse to start —
-# an unreachable fleet. ssh-keygen -A only creates what is missing, so this is
-# idempotent and costs nothing when the regenerator has already done its job.
-if [[ "$DRY_RUN" -eq 0 ]]; then
-  mkdir -p /etc/systemd/system/ssh.service.d
-  cat >/etc/systemd/system/ssh.service.d/10-combiner-hostkeys.conf <<'EOF'
-# Installed by combiner-seal: guarantee sshd always has host keys, so a cloned
-# card can never come up unreachable.
+# Raspberry Pi OS regenerates host keys from regenerate_ssh_host_keys.service,
+# which is gated on ConditionFirstBoot. That condition did NOT fire on a sealed
+# card in testing, leaving a unit with no host keys — and ssh.service runs
+# `sshd -t` as its own ExecStartPre, which fails outright when keys are absent.
+# So sshd never starts and the unit is unreachable.
+#
+# A drop-in cannot fix that: drop-in ExecStartPre= lines are APPENDED, so they
+# run after the failing check. This needs its own unit, ordered before ssh, with
+# no condition on it. `ssh-keygen -A` only creates what is missing, so running
+# it on every boot is idempotent and costs nothing.
+install_hostkey_unit() {
+  cat >/etc/systemd/system/combiner-hostkeys.service <<'EOF'
+[Unit]
+Description=Generate any missing SSH host keys (combiner)
+Documentation=https://github.com/misnow1/vunet-dante-combiner-2000/blob/main/docs/sd-image.md
+After=systemd-remount-fs.service
+Before=ssh.service sshd.service
+ConditionPathIsReadWrite=/etc
+ConditionFileIsExecutable=/usr/bin/ssh-keygen
+DefaultDependencies=no
+Conflicts=shutdown.target
+Before=shutdown.target
+
 [Service]
-ExecStartPre=-/usr/bin/ssh-keygen -A
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/ssh-keygen -A
+
+[Install]
+WantedBy=sysinit.target
 EOF
-  echo "  install ssh host-key safety net"
+  # An earlier version of this script shipped a drop-in that could never work.
+  rm -f /etc/systemd/system/ssh.service.d/10-combiner-hostkeys.conf
+  rmdir /etc/systemd/system/ssh.service.d 2>/dev/null || true
+  systemctl daemon-reload
+  systemctl enable combiner-hostkeys.service >/dev/null 2>&1
+}
+
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  echo "  would: install and enable combiner-hostkeys.service (ssh host-key safety net)"
 else
-  echo "  would: install ssh host-key safety net (ssh.service drop-in)"
+  echo "  install and enable combiner-hostkeys.service (ssh host-key safety net)"
+  install_hostkey_unit
 fi
 
 if [[ "$DRY_RUN" -eq 1 ]]; then

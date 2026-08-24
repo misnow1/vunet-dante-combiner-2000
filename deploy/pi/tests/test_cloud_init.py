@@ -235,3 +235,17 @@ def test_each_stage_claims_a_new_instance(tmp_path: Path) -> None:
     assert second.returncode == 0, second.stderr
     two = yaml.safe_load((tmp_path / "card" / "meta-data").read_text())["instance-id"]
     assert one != two
+
+
+def test_previous_boot_log_is_kept_not_deleted(tmp_path: Path) -> None:
+    """Staging must not destroy the log from a boot you are still debugging,
+    while still keeping a previous unit's log from being read as this one's."""
+    card = tmp_path / "card"
+    card.mkdir()
+    (card / "config.txt").touch()
+    (card / "combiner-firstboot.log").write_text("evidence from the failed boot\n")
+
+    r = _prep_card(tmp_path, "--password-hash", GOOD_HASH)
+    assert r.returncode == 0, r.stderr
+    assert not (card / "combiner-firstboot.log").exists()
+    assert (card / "combiner-firstboot.log.prev").read_text() == "evidence from the failed boot\n"

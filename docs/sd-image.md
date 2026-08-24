@@ -143,7 +143,9 @@ the box, or `http://<control-ip>:8080/`.
 
 Pull the card, put it in a laptop, and open **`combiner-firstboot.log`** on the
 boot partition. Every step is logged there, and a failure prints a
-`PROVISIONING FAILED` banner naming the cause.
+`PROVISIONING FAILED` banner naming the cause. Re-staging the card moves that
+log aside to `combiner-firstboot.log.prev` rather than deleting it, so the boot
+you are debugging survives a re-stage.
 
 A failed provision leaves IP forwarding **off**. That is the safe state: the
 unit will not bridge Control and Dante until the problem is fixed. Re-staging

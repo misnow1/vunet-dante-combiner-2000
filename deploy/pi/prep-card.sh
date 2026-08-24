@@ -348,8 +348,13 @@ echo "meta-data: instance-id $INSTANCE_ID (forces a full re-provision)"
 # reaches runcmd at all.
 touch "$CARD/ssh"
 
-# A log from a previous unit built on this card would be read as this one's.
-rm -f "$CARD/combiner-firstboot.log"
+# A log from a previous unit built on this card would be read as this one's,
+# but deleting it destroys evidence from a boot you may still be debugging.
+# Keep exactly one generation instead.
+if [[ -f "$CARD/combiner-firstboot.log" ]]; then
+  mv -f "$CARD/combiner-firstboot.log" "$CARD/combiner-firstboot.log.prev"
+  echo "previous boot log kept as combiner-firstboot.log.prev"
+fi
 
 sync 2>/dev/null || true
 

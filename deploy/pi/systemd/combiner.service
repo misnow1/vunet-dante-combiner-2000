@@ -1,6 +1,6 @@
 [Unit]
 Description=VuNET/Dante Control Combiner (multicast reflector + status)
-After=network-online.target nftables.service
+After=network-online.target nftables.service combiner-apply.service
 Requires=nftables.service
 Wants=network-online.target
 

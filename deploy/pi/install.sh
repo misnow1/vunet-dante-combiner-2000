@@ -208,51 +208,6 @@ echo 8021q >/etc/modules-load.d/combiner-8021q.conf
 systemctl disable --now avahi-daemon 2>/dev/null || true
 systemctl mask avahi-daemon 2>/dev/null || true
 
-mkdir -p /etc/combiner/allowlists
-cp "$STAGED_ETC/site.yaml" /etc/combiner/site.yaml
-cp -a "$STAGED_ETC/allowlists/." /etc/combiner/allowlists/
-SITE_YAML=/etc/combiner/site.yaml
-
-
-# Keep forwarding OFF until a validated ruleset is loaded
-mkdir -p /etc/sysctl.d
-cat >/etc/sysctl.d/99-combiner.conf <<'EOF'
-net.ipv4.ip_forward=0
-net.ipv4.conf.all.forwarding=0
-net.ipv4.conf.default.forwarding=0
-net.ipv4.conf.all.send_redirects=0
-net.ipv4.conf.default.send_redirects=0
-EOF
-sysctl --system >/dev/null
-
-# Stage + validate nftables BEFORE touching live networking
-NFT_STAGE="$STAGING/nftables.conf"
-python3 "$ROOT/deploy/pi/generate-nftables.py" "$SITE_YAML" "$NFT_STAGE"
-if ! nft -c -f "$NFT_STAGE"; then
-  echo "generated nftables failed nft -c — aborting (forwarding still off)" >&2
-  exit 1
-fi
-
-# Fail-closed bootstrap: drop all forward immediately
-nft flush ruleset
-nft -f - <<'EOF'
-table inet combiner_bootstrap {
-  chain forward {
-    type filter hook forward priority filter; policy drop;
-  }
-}
-EOF
-
-# Backup previous combiner rules if present
-if [[ -f /etc/nftables.conf ]]; then
-  cp -a /etc/nftables.conf "/etc/nftables.conf.bak.$(date +%s)" || true
-fi
-cp "$NFT_STAGE" /etc/nftables.conf
-nft -f /etc/nftables.conf
-conntrack -F 2>/dev/null || true
-
-python3 "$ROOT/deploy/pi/generate-network-config.py" "$SITE_YAML" "$STAGING"
-
 # networkd only hands DNS= to systemd-resolved, so install it just for the lab
 # uplink case. Installing it rewrites /etc/resolv.conf as a symlink to its stub,
 # which leaves the box with no DNS at all if resolved is not actually running.
@@ -277,85 +232,30 @@ for svc in NetworkManager dhcpcd; do
   fi
 done
 
-mkdir -p /etc/systemd/network
-# Drop units from earlier runs first: a leftover .netdev whose Name matches a
-# renamed or now-untagged interface keeps networkd from managing that link.
-rm -f /etc/systemd/network/*combiner*.netdev /etc/systemd/network/*combiner*.network
-cp -a "$STAGING/systemd/network/." /etc/systemd/network/
-
-HOSTNAME="$COMBINER_HOSTNAME"
-echo "$HOSTNAME" >/etc/hostname
-hostnamectl set-hostname "$HOSTNAME" 2>/dev/null || hostname "$HOSTNAME"
-
-# Binaries were resolved and preflighted near the top of this script.
+# Install the runtime pieces. The generators go to a stable path so
+# combiner-apply works at boot without the unpacked release tree still being
+# around.
 install -m 0755 "$BIN_DIR/combiner" /usr/local/bin/combiner
 install -m 0755 "$BIN_DIR/combiner-status" /usr/local/bin/combiner-status
+install -m 0755 "$ROOT/deploy/pi/combiner-apply.sh" /usr/local/sbin/combiner-apply
+install -d /usr/local/lib/combiner
+install -m 0644 "$ROOT/deploy/pi/generate-nftables.py" \
+                "$ROOT/deploy/pi/generate-network-config.py" \
+                "$ROOT/deploy/pi/site_config.py" \
+                /usr/local/lib/combiner/
 install -m 0644 "$ROOT/deploy/pi/systemd/combiner.service" /etc/systemd/system/combiner.service
+install -m 0644 "$ROOT/deploy/pi/systemd/combiner-apply.service" /etc/systemd/system/combiner-apply.service
 
 systemctl daemon-reload
-systemctl enable nftables combiner
-systemctl restart systemd-networkd
-networkctl reload 2>/dev/null || true
-systemctl restart nftables
+systemctl enable nftables combiner combiner-apply
 
-# systemd-networkd starting is not proof it configured anything — verify the
-# interfaces named in site.yaml actually exist before claiming success.
-networkd_diagnostics() {
-  echo "--- networkctl list ---" >&2
-  networkctl list --no-pager 2>&1 >&2 || true
-  echo "--- journalctl -u systemd-networkd (last 40) ---" >&2
-  journalctl -u systemd-networkd -b --no-pager -n 40 2>&1 >&2 || true
-  echo "--- ip -br addr ---" >&2
-  ip -br addr >&2 || true
-}
-
-MISSING=""
-for _ in $(seq 1 15); do
-  MISSING=""
-  while read -r role ifname; do
-    [[ -z "$ifname" ]] && continue
-    if [[ ! -e "/sys/class/net/$ifname" ]]; then
-      MISSING+="$role=$ifname "
-    fi
-  done <"$STAGING/combiner-interfaces.txt"
-  [[ -z "$MISSING" ]] && break
-  sleep 2
-done
-
-if [[ -n "$MISSING" ]]; then
-  echo "systemd-networkd did not create: $MISSING" >&2
-  echo "forwarding is still OFF; combiner not started" >&2
-  echo "if Mgmt should be native/untagged on $COMBINER_PHYSICAL_INTERFACE, set vlans.mgmt.untagged: true in $SITE_YAML" >&2
-  networkd_diagnostics
-  exit 1
-fi
-
-# Mgmt DHCP: enable dnsmasq only when site.yaml mgmt_dhcp.enabled is true.
-if [[ "$(cat "$STAGING/combiner-mgmt-dhcp.enabled")" == "1" ]]; then
-  mkdir -p /etc/dnsmasq.d
-  if [[ -f /etc/dnsmasq.conf ]]; then
-    sed -i 's/^#\?bind-interfaces.*/bind-interfaces/' /etc/dnsmasq.conf || true
-  fi
-  cp "$STAGING/dnsmasq.d/combiner-mgmt.conf" /etc/dnsmasq.d/combiner-mgmt.conf
-  systemctl enable dnsmasq
-  systemctl restart dnsmasq
-else
-  rm -f /etc/dnsmasq.d/combiner-mgmt.conf
-  systemctl disable --now dnsmasq 2>/dev/null || true
-  echo "mgmt_dhcp.enabled=false — dnsmasq not started"
-fi
-
-# Enable forwarding ONLY after rules are live
-cat >/etc/sysctl.d/99-combiner.conf <<'EOF'
-net.ipv4.ip_forward=1
-net.ipv4.conf.all.forwarding=1
-net.ipv4.conf.default.forwarding=1
-net.ipv4.conf.all.send_redirects=0
-net.ipv4.conf.default.send_redirects=0
-EOF
-sysctl --system >/dev/null
-
-systemctl restart combiner
+# Everything config-derived now lives in combiner-apply, so a first install and
+# a later re-home run exactly the same code path. --force because an install
+# must apply even when the config happens to match what is already live.
+/usr/local/sbin/combiner-apply \
+  --config "$SITE_YAML" \
+  --allowlists "$ROOT/config/allowlists" \
+  --force
 
 # Type=simple means restart returns 0 even if combiner exits immediately.
 sleep 3

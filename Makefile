@@ -53,6 +53,7 @@ package: build-pi build-pi-arm build-linux-amd64
 		cp -a config/allowlists "$$stage/config/"; \
 		cp deploy/pi/install.sh \
 			deploy/pi/prep-card.sh \
+			deploy/pi/combiner-apply.sh \
 			deploy/pi/generate-nftables.py \
 			deploy/pi/generate-nftables.sh \
 			deploy/pi/generate-network-config.py \
@@ -62,6 +63,7 @@ package: build-pi build-pi-arm build-linux-amd64
 		cp -a deploy/pi/systemd deploy/pi/cloud-init "$$stage/deploy/pi/"; \
 		chmod 755 "$$stage/deploy/pi/install.sh" \
 			"$$stage/deploy/pi/prep-card.sh" \
+			"$$stage/deploy/pi/combiner-apply.sh" \
 			"$$stage/deploy/pi/cloud-init/combiner-firstboot.sh" \
 			"$$stage/deploy/pi/generate-nftables.py" \
 			"$$stage/deploy/pi/generate-nftables.sh" \
@@ -77,6 +79,7 @@ package: build-pi build-pi-arm build-linux-amd64
 shellcheck:
 	@if command -v shellcheck >/dev/null 2>&1; then \
 		shellcheck -S warning deploy/pi/install.sh deploy/pi/prep-card.sh \
+			deploy/pi/combiner-apply.sh \
 			deploy/pi/cloud-init/combiner-firstboot.sh deploy/pi/generate-nftables.sh; \
 		echo "shellcheck OK"; \
 	else \

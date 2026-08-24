@@ -1,0 +1,19 @@
+[Unit]
+Description=Apply combiner site config from the boot partition
+Documentation=https://github.com/misnow1/vunet-dante-combiner-2000/blob/main/docs/sd-image.md
+# The config lives on the FAT boot partition so a card can be re-homed in a
+# laptop; wait for it to be mounted.
+After=local-fs.target
+Before=combiner.service
+ConditionPathIsDirectory=/etc/combiner
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/combiner-apply
+# A rejected config leaves the previous one running, which is the safe outcome;
+# do not wedge the boot over it.
+SuccessExitStatus=0
+
+[Install]
+WantedBy=multi-user.target

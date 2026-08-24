@@ -139,6 +139,41 @@ Eject, insert, power on, and wait a few minutes. On first boot the Pi:
 Then check it the usual way ([`setup.md`](setup.md) §5): `combiner-status` on
 the box, or `http://<control-ip>:8080/`.
 
+## Re-homing a unit: bench config, then pave it over
+
+Provisioning needs a mirror for apt; a rack does not have one. So provision on a
+bench network, then replace the config before the unit is racked:
+
+1. Stage a card with a **bench** config — an untagged `mgmt` VLAN on a LAN with
+   DHCP, a gateway and DNS, such as
+   [`site.lab-flat.example.yaml`](../config/site.lab-flat.example.yaml). Boot it
+   at the shop, let apt run, and verify the unit on your own network.
+2. When it is ready to rack, overwrite `combiner-site.yaml` on the boot
+   partition with the **production** config — re-run `prep-card.sh` with the
+   card in a laptop, or edit it over SSH while the unit is still on the bench.
+3. Rack it and power on. `combiner-apply` notices the config differs from what
+   is live and paves the new one over the old — no Internet, no console, no
+   keyboard.
+
+`combiner-apply` runs on every boot from `combiner-apply.service` and compares
+the config it would generate against what is actually live. When they match it
+exits without restarting anything, so a normal boot costs nothing. It reads the
+**boot partition** in preference to `/etc/combiner/site.yaml`, which is what
+makes the card the source of truth — edit `/etc` directly and the next boot will
+put it back.
+
+A rejected config changes nothing at all: the unit keeps running its previous
+configuration, and the reason lands in `combiner-apply.log` on the boot
+partition. Validate before you commit to a swap:
+
+```bash
+./deploy/pi/prep-card.sh --check-card     # from a laptop, card inserted
+sudo combiner-apply --dry-run             # on the unit itself
+```
+
+Verification has to happen **before** the pave, because afterwards the unit is
+on show addressing and unreachable from a bench LAN.
+
 ## When it does not come up
 
 Pull the card, put it in a laptop, and open **`combiner-firstboot.log`** on the

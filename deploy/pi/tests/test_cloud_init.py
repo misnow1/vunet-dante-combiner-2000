@@ -179,6 +179,13 @@ def test_ssh_service_is_enabled_before_provisioning(user_data: dict[str, Any]) -
     boot_at = next(i for i, c in enumerate(flat) if "combiner-firstboot.sh" in c)
     assert ssh_at < boot_at, "ssh must be enabled before provisioning can fail"
 
+    # ssh.service fails its own `sshd -t` when host keys are missing, so
+    # enabling without generating them first achieves nothing on a sealed or
+    # key-less card. Generation must come first, in the same step.
+    step = flat[ssh_at]
+    assert "ssh-keygen -A" in step, step
+    assert step.index("ssh-keygen -A") < step.index("systemctl enable"), step
+
 
 def test_prep_card_writes_the_ssh_marker(tmp_path: Path) -> None:
     """sshswitch.service enables sshd from this marker, covering a boot that

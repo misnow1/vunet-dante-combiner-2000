@@ -13,36 +13,52 @@
 # becomes a trunk, which is fine for install and status-page smoke tests.
 # Operator steps: docs/setup.md (lab section).
 
-hostname: combiner
+hostname: virgil
 physical_interface: eth0
 status_listen: ":8080"
 
+# Control clients sit on Dante Primary, as in production. This is what makes
+# allowlists/vunet.yaml (vlan: control) legal below — a peer role may not match
+# client_vlan, so VU-NET can only be reflected when the client is on Dante.
+client_vlan: dante
+
 vlans:
-  mgmt:
-    id: 1
-    address: 192.168.1.2
-    prefix: 24
-    untagged: true
-    gateway: 192.168.1.1
-    dns: [192.168.1.1]
+  # Martin Control — the amps. Reflected peer, and the VLAN the denies protect.
   control:
     id: 200
     address: 10.200.0.1
     prefix: 21
     interface_name: eth0.200
+  # Dante Network - not present in the lab but here to satisfy the configuration.
   dante:
     id: 201
     address: 10.201.0.1
     prefix: 21
     interface_name: eth0.201
+  # For testing, the untagged network is the management network
+  mgmt:
+    id: 1
+    address: 192.168.33.212
+    prefix: 24
+    untagged: true
+    gateway: 192.168.33.1
+    dns: [192.168.33.1]
 
+# Combiner does not run DHCP on Control or Dante (core switch / existing pools).
 mgmt_dhcp:
   enabled: false
 
+
+# Clients are on Dante now, so Dante must be able to reach SSH and the status
+# page or the operator has no way in. Control stays permitted for a laptop
+# patched into the amp VLAN.
+management_access: [dante, control, mgmt]
+
+# Only VU-NET is reflected. Dante, Shure and Lake are all native to the client
+# VLAN in this topology and must NOT be listed — config rejects a peer role
+# that matches client_vlan.
 allowlist_files:
-  - allowlists/dante.yaml
-  - allowlists/shure.yaml
-  - allowlists/lake.yaml
+  - allowlists/vunet.yaml
 
 deny_multicast_prefixes:
   - 224.0.1.128/30

@@ -37,7 +37,7 @@ So the two protocols want opposite sides of the combiner, and which one gets to 
 | Native (full function) | VuNET, mixer control, MixPad | **Dante Controller, Shure WWB, Lake** |
 | Reflected + SNATed | Dante, Shure, Lake | **Martin VuNET** |
 | Dante metering / device config | **Not available** | Works |
-| Example | [`site.example.yaml`](../config/site.example.yaml) | [`site.dante-client.example.yaml`](../config/site.dante-client.example.yaml) |
+| Example | none shipped — omit `client_vlan` (it defaults to `control`) | [`site.example.yaml`](../config/site.example.yaml), [`site.lab-flat.example.yaml`](../config/site.lab-flat.example.yaml) |
 
 Pick `dante` when the operator needs full Dante Controller. Keep the default when clients are **tablets on Wi-Fi**: that profile puts the WAP on Dante Primary, exposing PTP and any multicast audio to a medium that carries multicast at low basic rates — the same *class* of problem the design avoids for the amp stack.
 

@@ -18,10 +18,9 @@ Pick the profile that matches your combiner port, copy it to `/etc/combiner/site
 
 | Combiner port | Profile |
 | --- | --- |
-| **Audio trunk** — PVID/untagged Dante, tagged Control | [`config/site.example.yaml`](../config/site.example.yaml) **(default)** |
-| Fully tagged — no untagged VLAN on the port | [`config/site.tagged-trunk.example.yaml`](../config/site.tagged-trunk.example.yaml) |
+| **Audio trunk** — PVID/untagged Dante carrying clients, tagged Control carrying amps | [`config/site.example.yaml`](../config/site.example.yaml) **(production)** |
+| Fully tagged — no untagged VLAN on the port | `site.example.yaml`, with the one-line change its `dante:` block documents |
 | Flat lab LAN — untagged Mgmt uplink, Control/Dante tagged | [`config/site.lab-flat.example.yaml`](../config/site.lab-flat.example.yaml) |
-| Control clients live on **Dante** instead | [`config/site.dante-client.example.yaml`](../config/site.dante-client.example.yaml) |
 
 Example prefixes (`/21` on the audio nets):
 
@@ -128,7 +127,7 @@ tar -xzf combiner.tgz
 cd vunet-dante-combiner-VERSION-linux-arm64
 
 sudo mkdir -p /etc/combiner
-sudo cp config/site.example.yaml /etc/combiner/site.yaml   # or site.tagged-trunk / site.lab-flat
+sudo cp config/site.example.yaml /etc/combiner/site.yaml   # or site.lab-flat
 # edit /etc/combiner/site.yaml
 sudo ./deploy/pi/install.sh /etc/combiner/site.yaml --i-have-console
 ```

@@ -68,7 +68,7 @@ Amp **control** must stay off Dante **PTP and media** (Martin best practice: PTP
 
 Under the **default** (control-client) profile, VuNET discovery groups are **not** a combiner allowlist. Clients share the Control broadcast domain with the amps, so VuNET works as in break-glass (native L2). Unicast is on-subnet; no SNAT. Adding a Control-VLAN group there would hairpin Control onto itself, and config rejects it.
 
-Under [`config/site.dante-client.example.yaml`](../config/site.dante-client.example.yaml) (`client_vlan: dante`) the roles invert: clients sit on Dante for full Dante Controller function, and VuNET becomes the reflected protocol. [`config/allowlists/vunet.yaml`](../config/allowlists/vunet.yaml) is loaded **only** in that profile.
+Under `client_vlan: dante` — which both shipped profiles use — the roles invert: clients sit on Dante for full Dante Controller function, and VuNET becomes the reflected protocol. [`config/allowlists/vunet.yaml`](../config/allowlists/vunet.yaml) is loaded **only** in that profile.
 
 ### Measured behaviour (12 WPC amps, 2026-08-23)
 

@@ -42,21 +42,11 @@ def site_config_mod() -> types.ModuleType:
 
 @pytest.fixture
 def site_example() -> Path:
-    """Default profile: audio trunk — Dante untagged (PVID), Control tagged."""
+    """Production profile: audio trunk — Dante untagged (PVID) and carrying the
+    clients, Control tagged and carrying the amps."""
     return CONFIG_DIR / "site.example.yaml"
-
-
-@pytest.fixture
-def site_tagged_trunk() -> Path:
-    return CONFIG_DIR / "site.tagged-trunk.example.yaml"
 
 
 @pytest.fixture
 def site_lab_flat() -> Path:
     return CONFIG_DIR / "site.lab-flat.example.yaml"
-
-
-@pytest.fixture
-def site_dante_client() -> Path:
-    """Control clients on Dante Primary; Martin VU-NET reflected the other way."""
-    return CONFIG_DIR / "site.dante-client.example.yaml"

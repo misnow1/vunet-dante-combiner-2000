@@ -19,22 +19,25 @@ func TestLoadExampleSite(t *testing.T) {
 	if site.Hostname != "combiner" {
 		t.Fatalf("hostname %q", site.Hostname)
 	}
-	if len(site.Allowlists) != 3 {
+	// Clients sit on Dante, so only VU-NET is reflected: Dante, Shure and Lake
+	// are native to the client VLAN and must not be listed.
+	if len(site.Allowlists) != 1 {
 		t.Fatalf("allowlists %d", len(site.Allowlists))
 	}
-	var danteGroups int
+	var vunetGroups int
 	for _, al := range site.Allowlists {
-		if al.Name == "dante" {
-			danteGroups = len(al.Groups)
+		if al.Name == "vunet" {
+			vunetGroups = len(al.Groups)
 		}
 	}
-	if danteGroups < 1 {
-		t.Fatal("expected dante groups")
+	if vunetGroups < 1 {
+		t.Fatal("expected vunet groups")
 	}
 	if site.MgmtIface() != "" {
 		t.Fatalf("production example must omit mgmt, got %s", site.MgmtIface())
 	}
-	if site.ClientIface() != "eth0.200" {
+	// Dante is both the PVID/untagged VLAN and the client VLAN.
+	if site.ClientIface() != "eth0" {
 		t.Fatalf("client iface %s", site.ClientIface())
 	}
 	if site.MgmtDHCP.IsEnabled() {
@@ -44,7 +47,7 @@ func TestLoadExampleSite(t *testing.T) {
 	for _, al := range site.Allowlists {
 		names = append(names, al.Name)
 	}
-	if strings.Join(names, ",") != "dante,shure,lake" {
+	if strings.Join(names, ",") != "vunet" {
 		t.Fatalf("allowlist names %v", names)
 	}
 	if !site.Denied(net.ParseIP("224.0.1.129")) {
@@ -469,9 +472,30 @@ groups:
 	}
 }
 
+// The shipped profiles both put clients on Dante, so neither loads
+// allowlists/dante.yaml. Exercise its expansion directly against the real file
+// rather than losing the coverage.
 func TestLoadExampleDanteControlExpanded(t *testing.T) {
-	root := filepath.Join("..", "..", "config", "site.example.yaml")
-	site, err := config.LoadSite(root)
+	allow, err := filepath.Abs(filepath.Join("..", "..", "config", "allowlists", "dante.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "site.yaml")
+	content := `
+hostname: x
+physical_interface: eth0
+vlans:
+  control: {id: 200, address: 10.200.0.1, prefix: 21, interface_name: eth0.200}
+  dante: {id: 201, address: 10.201.0.1, prefix: 21, untagged: true}
+mgmt_dhcp: {enabled: false}
+allowlist_files: [` + allow + `]
+deny_multicast_prefixes: [224.0.1.128/30, 224.0.1.132/32, 239.255.0.0/16]
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	site, err := config.LoadSite(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -565,8 +589,9 @@ deny_multicast_prefixes:
 	}
 }
 
-// The default example is an "audio trunk" port: Dante on the PVID (untagged),
-// Control tagged. Everything downstream keys off interface names.
+// The production example is an "audio trunk" port: Dante on the PVID
+// (untagged) carrying the clients, Control tagged carrying the amps.
+// Everything downstream keys off interface names.
 func TestExampleSiteAudioTrunk(t *testing.T) {
 	site, err := config.LoadSite(filepath.Join("..", "..", "config", "site.example.yaml"))
 	if err != nil {
@@ -575,39 +600,55 @@ func TestExampleSiteAudioTrunk(t *testing.T) {
 	if got := site.VLANs.Dante.Iface(site.PhysicalInterface); got != "eth0" {
 		t.Fatalf("dante iface %s, want eth0 (untagged/PVID)", got)
 	}
-	if got := site.ClientIface(); got != "eth0.200" {
-		t.Fatalf("control iface %s, want eth0.200", got)
+	if got := site.ClientIface(); got != "eth0" {
+		t.Fatalf("client iface %s, want eth0 (clients live on Dante)", got)
 	}
 	if site.HasMgmt() {
 		t.Fatal("audio-trunk example should not configure mgmt")
 	}
-	peer, err := site.PeerIface("dante")
+	if got := site.PeerRole(); got != "control" {
+		t.Fatalf("peer role %s, want control (the amps)", got)
+	}
+	peer, err := site.PeerIface("control")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if peer != "eth0.200" {
+		t.Fatalf("control peer iface %s, want eth0.200 (tagged)", peer)
 	}
 	if peer == site.ClientIface() {
-		t.Fatal("dante peer iface must differ from control iface")
+		t.Fatal("peer iface must differ from client iface")
 	}
 }
 
-func TestTaggedTrunkExample(t *testing.T) {
-	site, err := config.LoadSite(filepath.Join("..", "..", "config", "site.tagged-trunk.example.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := site.VLANs.Dante.Iface(site.PhysicalInterface); got != "eth0.201" {
-		t.Fatalf("dante iface %s, want eth0.201 (tagged)", got)
-	}
-	if got := site.ClientIface(); got != "eth0.200" {
-		t.Fatalf("control iface %s, want eth0.200", got)
-	}
-}
-
+// Both shipped profiles now set management_access explicitly (clients are on
+// Dante, so Dante must reach SSH or the operator has no way in), so the DEFAULT
+// needs a config of its own or the behaviour goes untested.
 func TestManagementAccessDefaults(t *testing.T) {
-	site, err := config.LoadSite(filepath.Join("..", "..", "config", "site.example.yaml"))
-	if err != nil {
-		t.Fatal(err)
+	write := func(t *testing.T, body string) *config.Site {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "site.yaml")
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		site, err := config.LoadSite(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return site
 	}
+
+	// No mgmt VLAN: the default is Control alone.
+	site := write(t, `
+hostname: x
+physical_interface: eth0
+vlans:
+  control: {id: 200, address: 10.200.0.1, prefix: 21, interface_name: eth0.200}
+  dante: {id: 201, address: 10.201.0.1, prefix: 21, untagged: true}
+mgmt_dhcp: {enabled: false}
+allowlist_files: []
+deny_multicast_prefixes: [224.0.1.128/30, 224.0.1.132/32, 239.255.0.0/16]
+`)
 	if got := site.ManagementRoles(); len(got) != 1 || got[0] != "control" {
 		t.Fatalf("roles %v, want [control]", got)
 	}
@@ -615,13 +656,46 @@ func TestManagementAccessDefaults(t *testing.T) {
 		t.Fatalf("ifaces %v, want [eth0.200]", got)
 	}
 
-	lab, err := config.LoadSite(filepath.Join("..", "..", "config", "site.lab-flat.example.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Omitted management_access keeps the historical control+mgmt behavior.
+	// With a mgmt VLAN, an omitted list widens to Control + Mgmt.
+	lab := write(t, `
+hostname: x
+physical_interface: eth0
+vlans:
+  mgmt: {id: 1, address: 192.168.1.2, prefix: 24, untagged: true}
+  control: {id: 200, address: 10.200.0.1, prefix: 21, interface_name: eth0.200}
+  dante: {id: 201, address: 10.201.0.1, prefix: 21, interface_name: eth0.201}
+mgmt_dhcp: {enabled: false}
+allowlist_files: []
+deny_multicast_prefixes: [224.0.1.128/30, 224.0.1.132/32, 239.255.0.0/16]
+`)
 	if got := lab.ManagementIfaces(); len(got) != 2 || got[0] != "eth0.200" || got[1] != "eth0" {
 		t.Fatalf("lab ifaces %v, want [eth0.200 eth0]", got)
+	}
+}
+
+// Clients live on Dante in both shipped profiles, so Dante must be able to
+// reach SSH and the status page — otherwise a field unit is console-only.
+func TestShippedExamplesReachableFromTheClientVLAN(t *testing.T) {
+	for _, name := range []string{"site.example.yaml", "site.lab-flat.example.yaml"} {
+		t.Run(name, func(t *testing.T) {
+			site, err := config.LoadSite(filepath.Join("..", "..", "config", name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if site.ClientRole() != "dante" {
+				t.Fatalf("client role %s, want dante", site.ClientRole())
+			}
+			var ok bool
+			for _, r := range site.ManagementRoles() {
+				if r == site.ClientRole() {
+					ok = true
+				}
+			}
+			if !ok {
+				t.Fatalf("management_access %v does not include the client VLAN %q",
+					site.ManagementRoles(), site.ClientRole())
+			}
+		})
 	}
 }
 

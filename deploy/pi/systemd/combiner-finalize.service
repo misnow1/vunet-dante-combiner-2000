@@ -1,0 +1,19 @@
+[Unit]
+Description=Lock the combiner root filesystem read-only once it has an identity
+Documentation=https://github.com/misnow1/vunet-dante-combiner-2000/blob/main/docs/sd-image.md
+# Must run AFTER the things that give a clone its own identity and its config.
+# Ordering on units that may not exist is a harmless no-op.
+After=combiner-hostkeys.service combiner-apply.service
+After=cloud-final.service cloud-init.target
+# Never race a provisioning run: rebooting mid-provision would be worse than
+# leaving the root writable for one more boot.
+After=multi-user.target
+ConditionPathExists=/boot/firmware/cmdline.txt
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/combiner-finalize
+
+[Install]
+WantedBy=multi-user.target

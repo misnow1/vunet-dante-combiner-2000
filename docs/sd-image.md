@@ -258,96 +258,72 @@ is Raspberry Pi's newer appliance-oriented tool, wants a native arm64 Debian
 host, and has [known Imager-customisation rough
 edges](https://github.com/raspberrypi/rpi-image-gen/issues/182).
 
-## Planned: read-only root
+## Read-only root
 
-`/boot/firmware/combiner-site.yaml` becomes the single source of truth, with
-`/etc/combiner/site.yaml` a symlink to it. A `combiner-apply.service`
-regenerates the ruleset and networkd units into `/run` on every boot and loads
-them; root then stays read-only under an overlay permanently.
+A racked combiner is powered off by pulling the rack. Once a unit has been
+sealed and cloned, `combiner-finalize` locks its root filesystem read-only, so
+there is no in-flight write for a hard cut to corrupt.
 
-Two things fall out of that:
-
-- **Nothing persistent to corrupt.** Pulling power cannot damage a filesystem
-  that was never mounted writable.
-- **A racked unit is reconfigurable without a login.** Pull the card, edit the
-  YAML on a laptop, reseat it — the only workflow that survives a box with no
-  console, no network, and no keyboard.
-
-Cheaper than it sounds: `generate-nftables.py` and `generate-network-config.py`
-already take an arbitrary output directory and write a self-contained tree, so
-**neither generator needs to change** — only `install.sh` splits into a
-bench-time installer and a boot-time apply. `combiner.service` already sets
-`ProtectSystem=strict` and writes nothing.
-
-Supporting hardening, in rough order of value:
-
-| Change | Why |
-| --- | --- |
-| `overlayroot` package | Read-only root. More reliable than raspi-config's overlay, which has [known Pi 5 / 64-bit issues](https://github.com/raspberrypi/bookworm-feedback/issues/137) |
-| journald `Storage=volatile` | Logs to RAM — the largest source of steady SD writes |
-| No swap (`dphys-swapfile` off) | Second largest, and pointless on an appliance |
-| `noatime`, `fsck.repair=yes` | Fewer writes; automatic repair after a hard cut |
-| `/boot/firmware` mounted `ro` | The config partition is only written during a deliberate change |
-| Hardware watchdog (`RuntimeWatchdogSec`) | A hung headless box in a rack reboots itself instead of staying dark |
-
-SSH host keys must be generated during first boot, **before** the overlay is
-enabled, so they land in the persistent lower layer and the unit's identity is
-stable across reboots.
-
-## Making spare cards
-
-A spare is not a freshly flashed card: packages and binaries live on the card's
-root filesystem, so every spare has to have been provisioned. Doing that once
-and cloning is the efficient path.
-
-```bash
-# On a provisioned, verified unit — as the LAST thing before powering it off:
-sudo combiner-seal --poweroff
+```
+root:  overlay  lowerdir=/media/root-ro  upperdir=/media/root-rw/overlay
+lower: ext4 ro    <- the SD card
+upper: tmpfs rw   <- every write, discarded on reboot
 ```
 
-Then image the card and write copies:
+Writes still succeed — they land in RAM — so nothing breaks. `combiner-apply`
+regenerates the ruleset, networkd units and hostname from
+`/boot/firmware/combiner-site.yaml` on **every** boot, which is what makes an
+ephemeral `/etc` workable: the card is the source of truth and the running
+config is rebuilt from it each time. Changing a racked unit is still
+pull-card → edit YAML → reseat.
+
+### Why it locks on the second boot, not at seal time
+
+A sealed card has no identity: `combiner-seal` clears machine-id and the SSH
+host keys so each clone generates its own. Under a read-only root those writes
+would land in tmpfs and be discarded, and the unit would present a **different
+host key on every reboot**. So the first boot of a clone runs writable;
+`combiner-finalize` waits until the identity exists and the config has applied,
+then locks the root and reboots.
+
+It refuses to lock, and retries on the next boot, when:
+
+- machine-id is still empty or there are no host keys — the clone has not
+  finished becoming itself
+- `combiner-apply` has not succeeded — freezing a misconfigured unit only makes
+  it harder to fix
+- `overlayroot` is not installed — `combiner-seal` installs it at bench time
+  precisely so this step needs no network
+
+### Unlocking for maintenance
+
+Locking is one token on the kernel command line, so it is reversible from a
+laptop with nothing but the card:
 
 ```bash
-sudo dd if=/dev/diskN of=combiner-golden.img bs=4m status=progress
+sudo raspi-config nonint disable_overlayfs && sudo reboot   # on the unit
 ```
 
-Give each copy its own `combiner-site.yaml` on the boot partition
-(`prep-card.sh --site <rig>.yaml`, then `--check-card`) and boot it.
-`combiner-apply` paves that config in on first boot.
+or delete `overlayroot=tmpfs` from `cmdline.txt` on the boot partition. The
+card's own `/etc/fstab` is never modified — overlayroot rewrites it only in the
+tmpfs layer — so unlocking restores ordinary behaviour with nothing to undo.
 
-**What sealing clears** is everything a `dd` clone would otherwise share across
-the fleet:
+### What else the appliance does about unclean power
 
-| Cleared | Why it matters |
+| | |
 | --- | --- |
-| `/etc/machine-id` (truncated) | systemd-networkd derives its DHCP DUID from it, so clones collide on leases. An empty file is also what makes systemd treat the next boot as a first boot |
-| `/etc/ssh/ssh_host_*` | otherwise every unit presents one identity, and one compromised card is all of them |
-| `/var/lib/systemd/random-seed` | a shared seed means every clone starts from the same entropy |
-| `/etc/combiner/site.yaml` | so a clone whose card is missing a config fails loudly instead of silently coming up on the golden unit's addressing |
-| journal, logs, histories, leases | one unit's history should not appear on every unit |
+| Root read-only | The card is never written during normal operation |
+| journald `Storage=volatile`, capped at 32M | Logs live in RAM. Set at lock time, not install time, so a bench unit keeps a persistent journal to debug with |
+| No swap | The swapfile is removed at install: SD wear, and a corruption risk on a hard cut, for something a combiner never needs |
+| Hardware watchdog | Already enabled by Raspberry Pi OS itself (`RuntimeWatchdogSec=1m`); a hung kernel reboots without anyone driving to the rack |
+| `fsck.repair=yes`, `noatime` | Already in the stock Raspberry Pi OS cmdline and fstab |
 
-**What sealing keeps** is the point of cloning: packages, binaries, units, and
-cloud-init's record that provisioning already happened. A clone must not try to
-re-provision — that needs a mirror it will not have.
+`systemd-remount-fs` is skipped while the overlay is active — it tries to
+remount `/` from fstab, which overlayfs rejects outright, and a permanently
+failed unit would destroy `systemctl --failed` as a health signal on a box
+nobody can inspect. The condition lifts by itself when the root is unlocked.
 
-Host keys and machine-id regenerate uniquely on each clone's first boot.
-Raspberry Pi OS ships `regenerate_ssh_host_keys.service` for this, but it is
-gated on `ConditionFirstBoot` — and on a sealed card that condition was observed
-**not** to fire, leaving the unit with no host keys at all. `ssh.service` runs
-`sshd -t` as its own `ExecStartPre`, which fails outright when keys are missing,
-so sshd never starts and the unit is unreachable.
-
-Sealing therefore installs `combiner-hostkeys.service`: a plain oneshot ordered
-`Before=ssh.service`, with no condition on it, running `ssh-keygen -A` (which
-only creates what is missing, so it is free on every later boot). A drop-in
-cannot substitute for this — drop-in `ExecStartPre=` lines are appended, so they
-run *after* the check that already failed.
-
-Run `combiner-seal --dry-run` first if you want to see the list without
-changing anything. Do not boot a sealed card expecting it to work — it has no
-config; re-stage it or image it.
-
-## Updating a racked unit
+## Updating a racked unit## Updating a racked unit
 
 With a read-only root and no uplink, the honest answer is usually **swap the
 card** — cards are cheap, the config lives on the card's FAT partition, and a

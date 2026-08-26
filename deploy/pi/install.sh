@@ -204,6 +204,25 @@ if ! modprobe 8021q; then
 fi
 echo 8021q >/etc/modules-load.d/combiner-8021q.conf
 
+# --- appliance hardening -----------------------------------------------------
+# This box is powered off by pulling the rack, and nobody is watching it.
+
+# Swap on an SD card is both a wear source and a corruption risk on an unclean
+# cut, and a combiner has no use for it — the reflector is bounded and the
+# service already caps itself at MemoryMax=256M. Removing the file also keeps
+# ~950MB out of every golden image cloned from this card.
+if systemctl list-unit-files dphys-swapfile.service >/dev/null 2>&1; then
+  systemctl disable --now dphys-swapfile 2>/dev/null || true
+fi
+swapoff -a 2>/dev/null || true
+rm -f /var/swap 2>/dev/null || true
+
+# No watchdog config here on purpose: Raspberry Pi OS already ships
+# /usr/lib/systemd/system.conf.d/40-rpi-enable-watchdog.conf with
+# RuntimeWatchdogSec=1m, so a hung kernel already reboots itself. A drop-in of
+# ours would also need to sort after "40-" to win, which is a sharp edge worth
+# not introducing for a setting the vendor already made.
+
 # Avoid conflict with combiner mDNS reflector on udp/5353
 systemctl disable --now avahi-daemon 2>/dev/null || true
 systemctl mask avahi-daemon 2>/dev/null || true

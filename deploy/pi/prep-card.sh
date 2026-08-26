@@ -9,7 +9,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CLOUD_INIT="$ROOT/deploy/pi/cloud-init"
-VERSION_DEFAULT="0.2.0"
+VERSION_DEFAULT="0.2.1"
 REPO="misnow1/vunet-dante-combiner-2000"
 
 CARD=""

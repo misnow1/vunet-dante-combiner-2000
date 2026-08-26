@@ -63,6 +63,12 @@ package: build-pi build-pi-arm build-linux-amd64
 			deploy/pi/README.md \
 			"$$stage/deploy/pi/"; \
 		cp -a deploy/pi/systemd deploy/pi/cloud-init "$$stage/deploy/pi/"; \
+		sed -i.bak -e 's|^VERSION_DEFAULT=.*|VERSION_DEFAULT="$(VERSION)"|' \
+			"$$stage/deploy/pi/prep-card.sh"; \
+		sed -i.bak -e 's|^COMBINER_VERSION=.*|COMBINER_VERSION="$${COMBINER_VERSION:-$(VERSION)}"|' \
+			"$$stage/deploy/pi/cloud-init/combiner-firstboot.sh"; \
+		rm -f "$$stage/deploy/pi/prep-card.sh.bak" \
+			"$$stage/deploy/pi/cloud-init/combiner-firstboot.sh.bak"; \
 		chmod 755 "$$stage/deploy/pi/install.sh" \
 			"$$stage/deploy/pi/prep-card.sh" \
 			"$$stage/deploy/pi/combiner-apply.sh" \

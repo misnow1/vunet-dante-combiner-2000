@@ -376,6 +376,35 @@ fi
 
 echo "meta-data: instance-id $INSTANCE_ID (forces a full re-provision)"
 
+# --- serial console ----------------------------------------------------------
+# A racked unit with no console can only be debugged by pulling its card. Set
+# this at STAGE time rather than during provisioning, so the console works on
+# the very first boot — including a boot where provisioning fails, which is
+# exactly when it is needed.
+#
+# Raspberry Pi OS already ships `console=serial0,115200` on the kernel cmdline,
+# but on a Pi 3 the mini-UART is not enabled without this, so serial0 resolves
+# to nothing. enable_uart=1 also pins the VPU core clock, which is what keeps
+# mini-UART baud stable.
+if [[ -f "$CARD/config.txt" ]]; then
+  if grep -qE '^[[:space:]]*enable_uart=' "$CARD/config.txt"; then
+    echo "config.txt: enable_uart already set — left alone"
+  else
+    [[ -f "$CARD/config.txt.combiner-orig" ]] ||
+      cp "$CARD/config.txt" "$CARD/config.txt.combiner-orig"
+    # Open a fresh [all] section first: appending bare would inherit whatever
+    # conditional filter the file happens to end in (Pi OS ends with [pi5] on
+    # some images), silently applying this to one model only.
+    printf '\n[all]\n# combiner: serial console for rack-side recovery (115200 8N1)\nenable_uart=1\n' \
+      >>"$CARD/config.txt"
+    echo "config.txt: enable_uart=1 added (serial console, 115200 8N1)"
+  fi
+  if ! grep -q 'console=serial' "$CARD/cmdline.txt" 2>/dev/null; then
+    echo "warning: cmdline.txt has no console=serial0 — the UART is enabled but" >&2
+    echo "         nothing will be logged to it" >&2
+  fi
+fi
+
 # Belt and braces with the runcmd in user-data: Raspberry Pi OS's sshswitch
 # service enables sshd when this marker exists, which covers a boot that never
 # reaches runcmd at all.

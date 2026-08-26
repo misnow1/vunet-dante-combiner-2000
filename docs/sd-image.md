@@ -105,6 +105,35 @@ To make the first boot work offline, also copy
 [Releases](https://github.com/misnow1/vunet-dante-combiner-2000/releases) onto
 the same partition. Otherwise give the Pi Internet for its first boot.
 
+### Serial console
+
+Staging also sets `enable_uart=1` in `config.txt`, so every unit comes up with a
+serial console on the GPIO header at **115200 8N1, no flow control**. Raspberry
+Pi OS already puts `console=serial0,115200` on the kernel cmdline, but on a Pi 3
+the mini-UART is not enabled without that line, so the console silently goes
+nowhere.
+
+It is worth wiring up before a unit is racked. A combiner that will not boot, or
+that comes up without SSH, is otherwise only diagnosable by pulling its card.
+
+| Pi pin | Signal | → USB-TTL adapter |
+| --- | --- | --- |
+| 6 | GND | GND |
+| 8 | GPIO14 / TXD | **RX** |
+| 10 | GPIO15 / RXD | **TX** |
+
+Use a **3.3V** adapter and leave its power lead disconnected — back-powering the
+Pi through the header risks corrupting the card. On macOS use the `cu.` device,
+not `tty.` (the latter blocks waiting for carrier detect):
+
+```bash
+screen /dev/cu.usbserial-XXXX 115200
+```
+
+In minicom, set **Hardware Flow Control: No** (`Ctrl-A` `O` → Serial port
+setup → `F`). It defaults to Yes, and a three-wire adapter has no RTS/CTS, so
+the window stays silent no matter how healthy the UART is.
+
 ### If you hand-edit the card afterwards
 
 `prep-card.sh` validates the file it copies, not the copy on the card. If you

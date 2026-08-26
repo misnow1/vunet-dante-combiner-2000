@@ -422,3 +422,46 @@ def test_cmdline_rewrite_preserves_other_nocloud_options(tmp_path: Path) -> None
     cmdline = (card / "cmdline.txt").read_text()
     assert "s=/boot/firmware/" in cmdline, cmdline
     assert cmdline.rstrip().endswith("quiet"), cmdline
+
+
+def _stage_with_config(tmp_path: Path, config_txt: str) -> Path:
+    card = tmp_path / "card"
+    card.mkdir(exist_ok=True)
+    (card / "config.txt").write_text(config_txt)
+    (card / "cmdline.txt").write_text("console=serial0,115200 root=PARTUUID=abc-02 ds=nocloud;i=rpi-imager-1\n")
+    r = _prep_card(tmp_path, "--password-hash", GOOD_HASH)
+    assert r.returncode == 0, r.stderr
+    return card
+
+
+def test_staging_enables_the_serial_console(tmp_path: Path) -> None:
+    """A racked unit with no console can only be debugged by pulling its card.
+    Set at stage time, not during provisioning, so it works on the very first
+    boot — including one where provisioning fails, which is when it is needed."""
+    card = _stage_with_config(tmp_path, "arm_64bit=1\n")
+    assert "enable_uart=1" in (card / "config.txt").read_text()
+
+
+def test_enable_uart_is_not_trapped_in_a_model_section(tmp_path: Path) -> None:
+    """config.txt uses conditional filters. Appending bare to a file ending in
+    [pi5] would silently apply enable_uart to one model only."""
+    card = _stage_with_config(tmp_path, "arm_64bit=1\n\n[pi5]\ndtoverlay=nospi10\n")
+    text = card / "config.txt"
+    body = text.read_text()
+    after_uart = body[: body.index("enable_uart=1")]
+    # The last conditional filter before our line must be [all].
+    filters = re.findall(r"^\[(\w+)\]", after_uart, re.M)
+    assert filters and filters[-1] == "all", filters
+
+
+def test_existing_enable_uart_is_left_alone(tmp_path: Path) -> None:
+    card = _stage_with_config(tmp_path, "arm_64bit=1\nenable_uart=0\n")
+    body = (card / "config.txt").read_text()
+    assert body.count("enable_uart") == 1, body
+    assert "enable_uart=0" in body, "an explicit setting must be respected"
+
+
+def test_enable_uart_is_idempotent(tmp_path: Path) -> None:
+    card = _stage_with_config(tmp_path, "arm_64bit=1\n\n[all]\n")
+    _prep_card(tmp_path, "--password-hash", GOOD_HASH)
+    assert (card / "config.txt").read_text().count("enable_uart") == 1

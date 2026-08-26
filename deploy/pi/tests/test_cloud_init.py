@@ -465,3 +465,54 @@ def test_enable_uart_is_idempotent(tmp_path: Path) -> None:
     card = _stage_with_config(tmp_path, "arm_64bit=1\n\n[all]\n")
     _prep_card(tmp_path, "--password-hash", GOOD_HASH)
     assert (card / "config.txt").read_text().count("enable_uart") == 1
+
+
+FINALIZE = REPO_ROOT / "deploy" / "pi" / "combiner-finalize.sh"
+
+
+def test_finalize_waits_for_the_clone_to_have_its_own_identity() -> None:
+    """A sealed image has no identity; a clone generates machine-id and host keys
+    on ITS first boot. Under a read-only root those writes go to tmpfs and are
+    discarded, so the unit would present a different host key every reboot. The
+    first boot must therefore run writable."""
+    text = FINALIZE.read_text()
+    assert "/etc/machine-id" in text
+    assert "ssh_host_" in text
+    assert "will retry next boot" in text
+
+
+def test_finalize_refuses_to_lock_a_broken_unit() -> None:
+    """Freezing a misconfigured box makes it harder to fix."""
+    assert "combiner-apply.service" in FINALIZE.read_text()
+
+
+def test_finalize_needs_no_network() -> None:
+    """It may run in a rack. combiner-seal installs overlayroot at bench time;
+    finalize must refuse rather than reach for apt."""
+    text = FINALIZE.read_text()
+    assert "dpkg -s overlayroot" in text
+    # It may MENTION apt-get in advice; it must never invoke it.
+    invocations = [ln for ln in text.splitlines() if re.match(r"\s*(\w+=\S+\s+)*apt-get\b", ln)]
+    assert not invocations, invocations
+
+
+def test_finalize_guards_against_a_doubled_token() -> None:
+    """raspi-config's disable_overlayfs is a single-occurrence sed, so two
+    copies of the token would leave a unit read-only after being 'unlocked'."""
+    text = FINALIZE.read_text()
+    assert "grep -q 'overlayroot=tmpfs' \"$CMDLINE\"" in text
+
+
+def test_finalize_keeps_cmdline_single_line() -> None:
+    """A mangled cmdline.txt is an unbootable Pi."""
+    text = FINALIZE.read_text()
+    assert "wc -l" in text
+    assert "combiner-prelock" in text
+
+
+def test_seal_arms_the_overlay_rather_than_enabling_it() -> None:
+    text = SEAL.read_text()
+    assert "combiner-finalize" in text
+    # overlayroot must be installed at bench time so locking needs no network.
+    assert "apt-get install -y overlayroot" in text
+    assert "--no-overlay" in text

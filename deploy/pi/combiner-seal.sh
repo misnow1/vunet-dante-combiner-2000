@@ -24,6 +24,7 @@ BOOT_DIR="/boot/firmware"
 ASSUME_YES=0
 DRY_RUN=0
 POWEROFF=0
+ARM_OVERLAY=1
 
 usage() {
   cat <<'USAGE'
@@ -32,6 +33,8 @@ usage: combiner-seal [--yes] [--dry-run] [--poweroff]
   --yes        proceed without the confirmation prompt
   --dry-run    list what would be cleared; change nothing
   --poweroff   power off when done, so the card can be pulled and imaged
+  --no-overlay do not arm the read-only root. Default is to arm it: each clone
+               locks its root after its first boot, once it has an identity
   -h, --help   this text
 
 Run this as the LAST thing before imaging a card. It leaves the unit without an
@@ -44,6 +47,7 @@ while [[ $# -gt 0 ]]; do
     --yes|-y)   ASSUME_YES=1; shift ;;
     --dry-run)  DRY_RUN=1; shift ;;
     --poweroff) POWEROFF=1; shift ;;
+    --no-overlay) ARM_OVERLAY=0; shift ;;
     -h|--help)  usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 1 ;;
   esac
@@ -51,6 +55,8 @@ done
 
 die() { echo "combiner-seal: $*" >&2; exit 1; }
 say() { echo "combiner-seal: $*"; }
+
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 [[ "$(id -u)" -eq 0 ]] || die "run as root"
 
@@ -180,6 +186,42 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
 else
   echo "  install and enable combiner-hostkeys.service (ssh host-key safety net)"
   install_hostkey_unit
+fi
+
+# --- read-only root ---------------------------------------------------------
+# Arm it rather than enable it. A sealed card has no identity, and a clone
+# generates machine-id and host keys on ITS first boot — under a read-only root
+# those writes go to tmpfs and vanish, so the unit would present a different
+# host key every reboot. combiner-finalize waits for the identity to exist,
+# then locks the root and reboots.
+#
+# overlayroot is installed HERE, where there is a bench network, so the locking
+# step itself needs none.
+arm_overlay() {
+  if ! dpkg -s overlayroot >/dev/null 2>&1; then
+    say "installing overlayroot (needs the bench network; the lock step will not)"
+    if ! DEBIAN_FRONTEND=noninteractive apt-get install -y overlayroot; then
+      die "could not install overlayroot — re-run with a network, or --no-overlay"
+    fi
+  fi
+  install -m 0755 "$SELF_DIR/combiner-finalize.sh" /usr/local/sbin/combiner-finalize 2>/dev/null ||
+    die "combiner-finalize.sh not found next to combiner-seal"
+  install -m 0644 "$SELF_DIR/systemd/combiner-finalize.service" \
+    /etc/systemd/system/combiner-finalize.service 2>/dev/null ||
+    die "combiner-finalize.service not found in systemd/ next to combiner-seal"
+  systemctl daemon-reload
+  systemctl enable combiner-finalize.service >/dev/null 2>&1
+}
+
+if [[ "$ARM_OVERLAY" -eq 1 ]]; then
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "  would: install overlayroot and arm combiner-finalize (read-only root)"
+  else
+    echo "  arm read-only root (combiner-finalize locks it after the first boot)"
+    arm_overlay
+  fi
+else
+  echo "  read-only root NOT armed (--no-overlay)"
 fi
 
 if [[ "$DRY_RUN" -eq 1 ]]; then

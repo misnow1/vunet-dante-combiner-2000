@@ -516,3 +516,14 @@ def test_seal_arms_the_overlay_rather_than_enabling_it() -> None:
     # overlayroot must be installed at bench time so locking needs no network.
     assert "apt-get install -y overlayroot" in text
     assert "--no-overlay" in text
+
+
+def test_the_two_version_pins_agree() -> None:
+    """prep-card.sh stages a release tarball; combiner-firstboot.sh downloads one
+    when none is staged. If they disagree, a card can be staged with one version
+    and provision itself with another — silently, and only on a unit with no
+    tarball on its card."""
+    prep = re.search(r'^VERSION_DEFAULT="([^"]+)"', PREP_CARD.read_text(), re.M)
+    boot = re.search(r'^COMBINER_VERSION="\$\{COMBINER_VERSION:-([^}]+)\}"', FIRSTBOOT.read_text(), re.M)
+    assert prep and boot, (prep, boot)
+    assert prep.group(1) == boot.group(1), f"{prep.group(1)} != {boot.group(1)}"

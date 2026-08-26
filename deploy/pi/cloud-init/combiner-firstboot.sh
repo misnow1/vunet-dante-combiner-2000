@@ -12,7 +12,7 @@ set -euo pipefail
 # Pinned so a rebuild of the same card produces the same unit. prep-card.sh
 # stages a tarball on the card by default, and a staged tarball always wins, so
 # this only matters when the Pi downloads its own.
-COMBINER_VERSION="${COMBINER_VERSION:-0.1.0}"
+COMBINER_VERSION="${COMBINER_VERSION:-0.2.0}"
 REPO="misnow1/vunet-dante-combiner-2000"
 
 BOOT="/boot/firmware"

@@ -207,15 +207,35 @@ echo 8021q >/etc/modules-load.d/combiner-8021q.conf
 # --- appliance hardening -----------------------------------------------------
 # This box is powered off by pulling the rack, and nobody is watching it.
 
-# Swap on an SD card is both a wear source and a corruption risk on an unclean
-# cut, and a combiner has no use for it — the reflector is bounded and the
-# service already caps itself at MemoryMax=256M. Removing the file also keeps
-# ~950MB out of every golden image cloned from this card.
-if systemctl list-unit-files dphys-swapfile.service >/dev/null 2>&1; then
+# Swap on an SD card is a wear source and a corruption risk on an unclean cut,
+# and a combiner has no use for it — the reflector is bounded and the service
+# already caps itself at MemoryMax=256M.
+#
+# Ask Raspberry Pi OS to stop making one, rather than deleting the file it
+# made. Trixie manages swap through /etc/rpi/swap.conf, whose default
+# ("auto" -> "zram+file") backs zram with a writeback FILE at /var/swap. Simply
+# removing that file leaves systemd-zram-setup@zram0 permanently failed, which
+# destroys `systemctl --failed` as a health signal on a box nobody can inspect.
+# The generator documents "zram" and "none" as mechanisms needing no swap file.
+if [ -f /etc/rpi/swap.conf ]; then
+  python3 - <<'PYSWAP'
+import pathlib, re
+p = pathlib.Path("/etc/rpi/swap.conf")
+s = p.read_text()
+if re.search(r"^\s*Mechanism\s*=", s, re.M):
+    s = re.sub(r"^\s*Mechanism\s*=.*$", "Mechanism=zram", s, count=1, flags=re.M)
+elif re.search(r"^\s*#\s*Mechanism\s*=", s, re.M):
+    s = re.sub(r"^\s*#\s*Mechanism\s*=.*$", "Mechanism=zram", s, count=1, flags=re.M)
+else:
+    s = re.sub(r"^\[Main\]\s*$", "[Main]\nMechanism=zram", s, count=1, flags=re.M)
+p.write_text(s)
+PYSWAP
+  echo "swap: /etc/rpi/swap.conf set to Mechanism=zram (no swap file on the card)"
+elif systemctl list-unit-files dphys-swapfile.service >/dev/null 2>&1; then
+  # Older images: the classic swap file, which is safe to turn off outright.
   systemctl disable --now dphys-swapfile 2>/dev/null || true
+  swapoff -a 2>/dev/null || true
 fi
-swapoff -a 2>/dev/null || true
-rm -f /var/swap 2>/dev/null || true
 
 # No watchdog config here on purpose: Raspberry Pi OS already ships
 # /usr/lib/systemd/system.conf.d/40-rpi-enable-watchdog.conf with
@@ -258,6 +278,13 @@ install -m 0755 "$BIN_DIR/combiner" /usr/local/bin/combiner
 install -m 0755 "$BIN_DIR/combiner-status" /usr/local/bin/combiner-status
 install -m 0755 "$ROOT/deploy/pi/combiner-apply.sh" /usr/local/sbin/combiner-apply
 install -m 0755 "$ROOT/deploy/pi/combiner-seal.sh" /usr/local/sbin/combiner-seal
+# Installed but NOT enabled: combiner-seal (or an operator) arms it. Shipping it
+# here rather than from seal means seal does not have to find it next to itself
+# — which it cannot, once seal lives in /usr/local/sbin and the release tree may
+# be gone.
+install -m 0755 "$ROOT/deploy/pi/combiner-finalize.sh" /usr/local/sbin/combiner-finalize
+install -m 0644 "$ROOT/deploy/pi/systemd/combiner-finalize.service" \
+  /etc/systemd/system/combiner-finalize.service
 install -d /usr/local/lib/combiner
 install -m 0644 "$ROOT/deploy/pi/generate-nftables.py" \
                 "$ROOT/deploy/pi/generate-network-config.py" \

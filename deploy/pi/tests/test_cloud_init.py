@@ -527,3 +527,25 @@ def test_the_two_version_pins_agree() -> None:
     boot = re.search(r'^COMBINER_VERSION="\$\{COMBINER_VERSION:-([^}]+)\}"', FIRSTBOOT.read_text(), re.M)
     assert prep and boot, (prep, boot)
     assert prep.group(1) == boot.group(1), f"{prep.group(1)} != {boot.group(1)}"
+
+
+def test_install_ships_finalize_so_seal_can_arm_it() -> None:
+    """combiner-seal lives in /usr/local/sbin once installed, where the release
+    tree is not. It must not have to find combiner-finalize next to itself."""
+    text = INSTALL.read_text()
+    assert "/usr/local/sbin/combiner-finalize" in text
+    assert "combiner-finalize.service" in text
+    # ...and seal must only enable it, never go looking for the source.
+    seal = SEAL.read_text()
+    assert "SELF_DIR" not in seal
+    assert "/usr/local/sbin/combiner-finalize" in seal
+
+
+def test_install_does_not_delete_the_zram_writeback_file() -> None:
+    """Raspberry Pi OS Trixie backs zram with a writeback file at /var/swap via
+    /etc/rpi/swap.conf. Deleting it leaves systemd-zram-setup@zram0 permanently
+    failed, which destroys `systemctl --failed` as a health signal."""
+    text = INSTALL.read_text()
+    assert "rm -f /var/swap" not in text
+    assert "/etc/rpi/swap.conf" in text
+    assert "Mechanism=zram" in text

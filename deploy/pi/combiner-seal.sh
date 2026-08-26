@@ -56,8 +56,6 @@ done
 die() { echo "combiner-seal: $*" >&2; exit 1; }
 say() { echo "combiner-seal: $*"; }
 
-SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
-
 [[ "$(id -u)" -eq 0 ]] || die "run as root"
 
 if [[ "$DRY_RUN" -eq 0 && "$ASSUME_YES" -eq 0 ]]; then
@@ -204,11 +202,11 @@ arm_overlay() {
       die "could not install overlayroot — re-run with a network, or --no-overlay"
     fi
   fi
-  install -m 0755 "$SELF_DIR/combiner-finalize.sh" /usr/local/sbin/combiner-finalize 2>/dev/null ||
-    die "combiner-finalize.sh not found next to combiner-seal"
-  install -m 0644 "$SELF_DIR/systemd/combiner-finalize.service" \
-    /etc/systemd/system/combiner-finalize.service 2>/dev/null ||
-    die "combiner-finalize.service not found in systemd/ next to combiner-seal"
+  # install.sh ships both; seal only decides whether they are armed.
+  [[ -x /usr/local/sbin/combiner-finalize ]] ||
+    die "combiner-finalize is not installed — re-run install.sh from a release tree"
+  [[ -f /etc/systemd/system/combiner-finalize.service ]] ||
+    die "combiner-finalize.service is not installed — re-run install.sh from a release tree"
   systemctl daemon-reload
   systemctl enable combiner-finalize.service >/dev/null 2>&1
 }

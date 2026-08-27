@@ -230,6 +230,13 @@ else:
     s = re.sub(r"^\[Main\]\s*$", "[Main]\nMechanism=zram", s, count=1, flags=re.M)
 p.write_text(s)
 PYSWAP
+  # The generator emits rpi-zram-writeback.timer only for the zram+file
+  # mechanism. Switching to zram stops it being emitted, and a copy already
+  # running becomes "not-found" and lands in failed state until the next boot —
+  # leaving a freshly provisioned unit with a failed unit, which is the same
+  # health-signal problem this whole change exists to avoid. Retire it here.
+  systemctl stop rpi-zram-writeback.timer 2>/dev/null || true
+  systemctl reset-failed rpi-zram-writeback.timer 2>/dev/null || true
   echo "swap: /etc/rpi/swap.conf set to Mechanism=zram (no swap file on the card)"
 elif systemctl list-unit-files dphys-swapfile.service >/dev/null 2>&1; then
   # Older images: the classic swap file, which is safe to turn off outright.
@@ -294,6 +301,8 @@ install -m 0644 "$ROOT/deploy/pi/systemd/combiner.service" /etc/systemd/system/c
 install -m 0644 "$ROOT/deploy/pi/systemd/combiner-apply.service" /etc/systemd/system/combiner-apply.service
 
 systemctl daemon-reload
+# Re-running the generators can orphan units the old swap mechanism created.
+systemctl reset-failed rpi-zram-writeback.timer 2>/dev/null || true
 systemctl enable nftables combiner combiner-apply
 
 # Everything config-derived now lives in combiner-apply, so a first install and

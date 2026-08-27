@@ -290,6 +290,7 @@ install -m 0755 "$ROOT/deploy/pi/combiner-seal.sh" /usr/local/sbin/combiner-seal
 # — which it cannot, once seal lives in /usr/local/sbin and the release tree may
 # be gone.
 install -m 0755 "$ROOT/deploy/pi/combiner-finalize.sh" /usr/local/sbin/combiner-finalize
+install -m 0755 "$ROOT/deploy/pi/combiner-lock.sh" /usr/local/sbin/combiner-lock
 install -m 0644 "$ROOT/deploy/pi/systemd/combiner-finalize.service" \
   /etc/systemd/system/combiner-finalize.service
 install -d /usr/local/lib/combiner

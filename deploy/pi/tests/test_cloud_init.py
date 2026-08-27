@@ -559,3 +559,30 @@ def test_install_retires_the_orphaned_zram_writeback_timer() -> None:
     text = INSTALL.read_text()
     assert "stop rpi-zram-writeback.timer" in text
     assert "reset-failed rpi-zram-writeback.timer" in text
+
+
+LOCK = REPO_ROOT / "deploy" / "pi" / "combiner-lock.sh"
+
+
+def test_install_ships_combiner_lock() -> None:
+    assert "/usr/local/sbin/combiner-lock" in INSTALL.read_text()
+
+
+def test_lock_preflights_at_the_bench_not_at_boot() -> None:
+    """The point of this script is that a person is watching when it fails."""
+    text = LOCK.read_text()
+    assert "/etc/machine-id" in text
+    assert "ssh_host_" in text
+    assert "combiner -check" in text
+
+
+def test_lock_refuses_a_sealed_card() -> None:
+    """A sealed card has no identity; locking it would freeze a unit with no
+    host keys and no machine-id of its own."""
+    assert "looks like a sealed card" in LOCK.read_text()
+
+
+def test_lock_off_keeps_cmdline_single_line() -> None:
+    text = LOCK.read_text()
+    assert "wc -l" in text
+    assert "multi-line cmdline.txt" in text

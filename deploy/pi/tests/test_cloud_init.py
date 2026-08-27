@@ -549,3 +549,13 @@ def test_install_does_not_delete_the_zram_writeback_file() -> None:
     assert "rm -f /var/swap" not in text
     assert "/etc/rpi/swap.conf" in text
     assert "Mechanism=zram" in text
+
+
+def test_install_retires_the_orphaned_zram_writeback_timer() -> None:
+    """rpi-zram-writeback.timer is emitted only for the zram+file mechanism.
+    Switching to zram stops it being emitted, and a running copy becomes
+    not-found and lands in failed state — leaving a freshly provisioned unit
+    with a failed unit, which is the health-signal problem this avoids."""
+    text = INSTALL.read_text()
+    assert "stop rpi-zram-writeback.timer" in text
+    assert "reset-failed rpi-zram-writeback.timer" in text

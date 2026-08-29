@@ -14,7 +14,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CLOUD_INIT="$ROOT/deploy/pi/cloud-init"
-VERSION_DEFAULT="0.2.3"
+VERSION_DEFAULT="0.2.4"
 REPO="misnow1/vunet-dante-combiner-2000"
 
 # Must match HOLD_MARKER in combiner-firstboot.sh, combiner-apply.sh and

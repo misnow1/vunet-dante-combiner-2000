@@ -260,9 +260,15 @@ fi
 # ours would also need to sort after "40-" to win, which is a sharp edge worth
 # not introducing for a setting the vendor already made.
 
-# Avoid conflict with combiner mDNS reflector on udp/5353
-systemctl disable --now avahi-daemon 2>/dev/null || true
-systemctl mask avahi-daemon 2>/dev/null || true
+# Avahi fights the combiner mDNS reflector on udp/5353 — but only once the
+# reflector is running, which a held unit's is not. Masking it during
+# provisioning takes away the one thing that makes a held unit findable:
+# it comes up on a DHCP address nobody chose, so combiner.local is how you
+# reach it. combiner-go-live masks it as part of the handover instead.
+if [[ "$DEFER_ACTIVATION" -eq 0 ]]; then
+  systemctl disable --now avahi-daemon 2>/dev/null || true
+  systemctl mask avahi-daemon 2>/dev/null || true
+fi
 
 # networkd only hands DNS= to systemd-resolved, so install it just for the lab
 # uplink case. Installing it rewrites /etc/resolv.conf as a symlink to its stub,

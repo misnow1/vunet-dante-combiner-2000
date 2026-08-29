@@ -19,7 +19,7 @@ set -euo pipefail
 # Pinned so a rebuild of the same card produces the same unit. prep-card.sh
 # stages a tarball on the card by default, and a staged tarball always wins, so
 # this only matters when the Pi downloads its own.
-COMBINER_VERSION="${COMBINER_VERSION:-0.2.3}"
+COMBINER_VERSION="${COMBINER_VERSION:-0.2.4}"
 REPO="misnow1/vunet-dante-combiner-2000"
 
 BOOT="/boot/firmware"
@@ -49,6 +49,24 @@ led() {
   fi
 }
 
+# Where to find this unit. It provisions on DHCP and then holds, so its address
+# is not one anybody chose and not one anybody can guess — and masking avahi
+# (install.sh does, even when deferring) means combiner.local will not answer
+# either. Everything here is teed to the log on the FAT partition, so this is
+# readable by pulling the card even when the console was not connected.
+addresses() {
+  # Capture first: piping straight into sed would mask a failing or empty ip(8)
+  # behind sed's exit status, printing a bare "Reachable at:" and nothing else.
+  local found
+  found="$(ip -4 -br addr show scope global 2>/dev/null || true)"
+  echo "Reachable at:"
+  if [[ -n "$found" ]]; then
+    echo "$found" | sed 's/^/  /'
+  else
+    echo "  (no global IPv4 address — check the console or the DHCP lease table)"
+  fi
+}
+
 fail() {
   led failed
   echo ""
@@ -62,6 +80,8 @@ fail() {
   echo "— so it should be reachable at whatever address DHCP gave it. That is"
   echo "usually the quicker way in than pulling the card."
   echo ""
+  addresses
+  echo ""
   echo "Read this file by putting the card in a laptop — it is on the FAT"
   echo "boot partition, so macOS and Windows can both see it:"
   echo "  $(basename "$LOG")"
@@ -70,7 +90,6 @@ fail() {
 }
 
 say "started $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-led provisioning
 
 if [[ -e "$MARKER" ]]; then
   say "already provisioned ($MARKER) — nothing to do"
@@ -163,6 +182,13 @@ mkdir -p "$(dirname "$INSTALL_ROOT")"
 mv "$TREE" "$INSTALL_ROOT"
 say "installed tree at $INSTALL_ROOT"
 
+# The earliest this can possibly fire. combiner-led ships in the release, so
+# before the tree is unpacked there is nothing to drive the LED with — an
+# earlier call is a silent no-op, which is what the first version of this did
+# while the docs promised a heartbeat. Everything before this point (cloud-init
+# is still installing packages) is covered by the stock trigger's own flicker.
+led provisioning
+
 # --- site config into place -------------------------------------------------
 mkdir -p /etc/combiner
 cp "$SITE_SRC" /etc/combiner/site.yaml
@@ -204,6 +230,8 @@ say "version: $("$INSTALL_ROOT/bin/combiner" -version 2>/dev/null || echo unknow
 say ""
 say "This unit is HOLDING on the network it booted with. Nothing has been"
 say "applied — its combiner-site.yaml is still only on the card."
+say ""
+addresses
 say ""
 say "  sudo combiner-go-live --status    what it will become"
 say "  sudo combiner-go-live             apply it and reboot into it"

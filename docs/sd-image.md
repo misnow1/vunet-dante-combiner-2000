@@ -206,16 +206,24 @@ Provisioning takes a few minutes. What the LED is saying meanwhile:
 
 | Activity LED | Meaning |
 | --- | --- |
-| fast heartbeat | provisioning is running |
+| stock card-activity flicker | packages installing — cloud-init's phase, before anything of ours runs |
+| fast heartbeat | the combiner is installing itself |
 | slow steady blink | provisioned, holding, waiting for you |
 | rapid burst | provisioning failed, or `combiner` is not running |
 | stock card-activity flicker | live and running normally |
 
+The two flickers are the same signal, which is the honest description: the LED
+helper ships in the release tarball, so nothing can drive it until that tarball
+is unpacked. Before then the stock trigger is what you get, and apt hammering
+the card makes it obvious enough that work is happening.
+
 ## 4. Verify it, then go live
 
 The unit is reachable right now and will not be afterwards, so this is the only
-convenient moment to check anything. SSH in — the login prints a reminder of
-which state it is in — and look:
+convenient moment to check anything. It answers to **`combiner.local`** while it
+holds — avahi stays up until go-live, precisely because a held unit is on a DHCP
+address nobody chose — and `combiner-firstboot.log` on the card records the
+address too. SSH in, and the login prints a reminder of which state it is in:
 
 ```bash
 sudo combiner-go-live --status     # held or live, and what it will become

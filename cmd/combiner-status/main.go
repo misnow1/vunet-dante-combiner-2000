@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/msnow/vunet-dante-combiner-2000/internal/buildinfo"
@@ -27,6 +28,47 @@ func provisioningHold() bool {
 		}
 	}
 	return false
+}
+
+// nftErrorRow decides how a failed counter read should read to an operator.
+//
+// A unit still in the provisioning hold has never applied a ruleset, so there
+// is no `inet combiner` table to list. nft reports that the only way it can —
+// "No such file or directory", with a caret diagram — and rendering that raw
+// says "something is broken" about the single most normal state a freshly
+// provisioned unit can be in. It is also multi-line, which breaks the column
+// alignment of everything after it.
+// Ordered deliberately: a non-root reader cannot tell whether a ruleset exists,
+// so "needs root" has to win over "no ruleset yet" — sudo is the step that
+// reveals which of the two it actually is.
+func nftErrorRow(holding bool, nftErr string) (label, detail string) {
+	switch {
+	case isPermissionError(nftErr):
+		return "nft_status", "needs root to read counters — run: sudo combiner-status"
+	case holding:
+		return "nft_status", "no ruleset yet — applied at go-live"
+	default:
+		return "nft_error", flatten(nftErr)
+	}
+}
+
+// nft reports this as "Operation not permitted (you must be root)" followed by
+// a netlink cache-initialisation line. Matching the phrases rather than the
+// whole string keeps this working if the wording around them shifts.
+func isPermissionError(s string) bool {
+	l := strings.ToLower(s)
+	for _, phrase := range []string{"operation not permitted", "must be root", "permission denied"} {
+		if strings.Contains(l, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+// flatten keeps a genuine nft diagnostic on one tabwriter row. Without this a
+// multi-line error silently misaligns every column below it.
+func flatten(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 func main() {
@@ -113,7 +155,8 @@ func main() {
 	fmt.Fprintf(w, "snat_to_control\t%s\n", n(s.NFT.SNATToControl))
 	fmt.Fprintf(w, "snat_to_dante\t%s\n", n(s.NFT.SNATToDante))
 	if s.NFT.Error != "" {
-		fmt.Fprintf(w, "nft_error\t%s\n", s.NFT.Error)
+		label, detail := nftErrorRow(s.Holding, s.NFT.Error)
+		fmt.Fprintf(w, "%s\t%s\n", label, detail)
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "DHCP_LEASES")

@@ -916,3 +916,94 @@ def test_the_release_package_makes_its_scripts_executable() -> None:
     chmod = package[package.index("chmod 755") :]
     for script in ("combiner-go-live.sh", "combiner-led.sh", "combiner-lock.sh"):
         assert f"deploy/pi/{script}" in chmod, script
+
+
+def test_firstboot_logs_where_to_find_the_unit() -> None:
+    """A held unit provisions on DHCP: its address is not one anybody chose, and
+    install.sh masks avahi even when deferring, so combiner.local will not answer
+    either. Everything firstboot prints is teed to the FAT partition, so the
+    address is readable by pulling the card when the console was not connected.
+    Both paths need it — a FAILED provision is when finding the unit matters
+    most, and it is still on the network it booted with."""
+    text = FIRSTBOOT.read_text()
+    assert "ip -4 -br addr show scope global" in text
+    body = text[text.index("addresses() {") :]
+    # Piping straight into sed masks a failing or empty ip(8) behind sed's exit
+    # status, printing a bare "Reachable at:" and nothing else.
+    assert "|| true" in body[: body.index("}")], "ip(8) failure must not be swallowed by a pipeline"
+    fail_body = text[text.index("fail() {") : text.index('say "started')]
+    assert "\n  addresses\n" in fail_body, "the FAILED banner must say where the unit is"
+    closing = text[text.index('say "provisioning complete"') :]
+    assert "\naddresses\n" in closing, "the success banner must say where the unit is"
+
+
+def test_go_live_status_validates_in_the_layout_the_unit_uses() -> None:
+    """allowlist_files resolve relative to the config's OWN directory, and the
+    card has no allowlists/ next to combiner-site.yaml — only /etc does. Checking
+    the card copy in place fails on a perfectly good config: the lab Pi reported
+    "config valid: NO" about one combiner-apply then applied without complaint.
+    prep-card.sh:validate_site_config and combiner-apply both stage a copy first;
+    this has to as well."""
+    text = GO_LIVE.read_text()
+    assert "stage_config" in text
+    assert "/etc/combiner/allowlists" in text
+    # No check may run against the card path directly.
+    for bad in ('-check -config "$BOOT_CONFIG"', '-config "$BOOT_CONFIG" -print-facts'):
+        assert bad not in text, f"validates the card copy in place: {bad}"
+
+
+def test_prep_card_and_go_live_agree_on_how_to_validate() -> None:
+    """Both answer "would this config be accepted?" and must answer it the same
+    way, or the bench and the unit disagree about the same file."""
+    for script in (PREP_CARD, GO_LIVE):
+        text = script.read_text()
+        assert "allowlists" in text, script.name
+        assert "site.yaml" in text, script.name
+
+
+def test_a_held_unit_keeps_mdns() -> None:
+    """The hold's whole promise is that the unit stays reachable, and it comes up
+    on a DHCP address nobody chose — so combiner.local is how you find it. Avahi
+    only conflicts with the combiner mDNS reflector on udp/5353 once that
+    reflector exists, which on a held unit it does not. Masking it during
+    provisioning took away the one thing that made a held unit findable."""
+    install = INSTALL.read_text()
+    mask_at = install.index("systemctl mask avahi-daemon")
+    guard_at = install.index('if [[ "$DEFER_ACTIVATION" -eq 0 ]]; then')
+    assert guard_at < mask_at, "avahi must not be masked when activation is deferred"
+    # And go-live has to pick it up, or a live unit would run both.
+    go_live = GO_LIVE.read_text()
+    assert "systemctl mask avahi-daemon" in go_live
+    assert go_live.index("mask avahi-daemon") < go_live.index('rm -f "$HOLD_MARKER"')
+
+
+def test_undo_restores_mdns() -> None:
+    """Symmetry with the handover: --undo puts the unit back on a bench, where
+    being findable is the point."""
+    text = GO_LIVE.read_text()
+    undo = text[text.index('if [[ "$ACTION" == "undo" ]]; then') : text.index("# --- guards ---")]
+    assert "unmask avahi-daemon" in undo
+
+
+def test_led_signal_fires_only_once_it_can() -> None:
+    """combiner-led ships in the release tarball, so a call before the tree is
+    unpacked is a silent no-op — which is what the first version did while the
+    docs promised a heartbeat."""
+    text = FIRSTBOOT.read_text()
+    unpack_at = text.index('mv "$TREE" "$INSTALL_ROOT"')
+    first_call = text.index("\nled provisioning")
+    assert first_call > unpack_at, "led provisioning must follow the unpack that provides the helper"
+
+
+@pytest.mark.parametrize("branch", ["live", "undo"])
+def test_both_reboots_pause_and_say_what_ctrl_c_does(branch: str) -> None:
+    """By the time either path reboots it is already committed — the marker and
+    the unit states are written. Calling the pause a cancel would be a lie at
+    the one moment the operator most needs to trust this output."""
+    text = GO_LIVE.read_text()
+    undo = text[text.index('if [[ "$ACTION" == "undo" ]]; then') : text.index("# --- guards ---")]
+    section = undo if branch == "undo" else text[text.index("# --- guards ---") :]
+    assert "REBOOT_DELAY" in section, branch
+    assert "Ctrl-C stops the reboot, not the" in section, branch
+    # The tty test must be captured before the tee redirect makes it useless.
+    assert "INTERACTIVE" in section, branch

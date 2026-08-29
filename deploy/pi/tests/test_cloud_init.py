@@ -1007,3 +1007,25 @@ def test_both_reboots_pause_and_say_what_ctrl_c_does(branch: str) -> None:
     assert "Ctrl-C stops the reboot, not the" in section, branch
     # The tty test must be captured before the tee redirect makes it useless.
     assert "INTERACTIVE" in section, branch
+
+
+def test_apply_keeps_etc_hosts_in_step_with_the_hostname() -> None:
+    """sudo resolves its own hostname on every invocation and warns loudly when
+    it cannot. combiner-apply set /etc/hostname and left /etc/hosts pointing at
+    the image's original name, so every unit greeted everyone with
+    "sudo: unable to resolve host <name>". Cosmetic, but it hits every unit that
+    takes its name from a config — which is all of them."""
+    text = APPLY.read_text()
+    assert "/etc/hosts" in text
+    assert "127.0.1.1" in text
+    # The write must follow the hostname it is tracking.
+    assert text.index("hostnamectl set-hostname") < text.index('sed -i "s/^127')
+
+
+def test_apply_notices_a_stale_etc_hosts() -> None:
+    """Without this the fix would never reach a unit that is otherwise up to
+    date: combiner-apply exits on "no change" before it writes anything, so an
+    already-deployed unit would keep its stale entry forever."""
+    text = APPLY.read_text()
+    detect = text[text.index("CHANGES=()") : text.index("if [[ ${#CHANGES[@]} -eq 0")]
+    assert "etc_hosts_name" in detect, "a stale /etc/hosts must count as a change"

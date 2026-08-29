@@ -4,17 +4,22 @@
 [![Release](https://github.com/misnow1/vunet-dante-combiner-2000/actions/workflows/release.yml/badge.svg)](https://github.com/misnow1/vunet-dante-combiner-2000/actions/workflows/release.yml)
 [![GitHub release](https://img.shields.io/github/v/release/misnow1/vunet-dante-combiner-2000)](https://github.com/misnow1/vunet-dante-combiner-2000/releases/latest)
 
-A portable Linux gateway so one control client (laptop or tablet) on the **Martin Control** VLAN can run **VuNET**, mixer apps, **Dante Controller**, **Lake Controller**, and **Shure WWB** without dual NICs — while keeping amp control off Dante PTP and never attaching Waves SoundGrid.
+A portable Linux gateway so one control client (laptop or tablet) can run **VuNET**, mixer apps, **Dante Controller**, **Lake Controller**, and **Shure WWB** from a single NIC — while keeping amp control off Dante PTP and never attaching Waves SoundGrid.
+
+In the shipped profile the client sits on **Dante Primary**, where Dante Controller, WWB and Lake all work natively (metering and device config need L2 adjacency, which no amount of forwarding can supply). The combiner carries **Martin VuNET** the other way, to the amps on Control.
 
 ## What it does
 
-- Attaches to a switch **trunk** with **Martin Control** and **Dante** (optional lab Mgmt for the Pi uplink). Either VLAN may be the port's untagged/PVID VLAN — the default profile matches an **audio trunk** port (untagged Dante, tagged Control)
-- Control clients share the amp/console VLAN; **SNATs** unicast Control→Dante so Dante/Lake/Shure devices see an on-subnet peer
-- **Reflects allowlisted multicast** discovery/control **Control↔Dante** (Dante, Shure, Lake after capture)
+- Attaches to a switch **trunk** carrying **Martin Control** and **Dante** (optional lab Mgmt for the Pi uplink). Either VLAN may be the port's untagged/PVID VLAN — the shipped profile matches an **audio trunk** port (untagged Dante, tagged Control)
+- Clients share the Dante broadcast domain, so Dante Controller, Lake and WWB are native. The combiner **SNATs** unicast Dante→Control so the Martin amps see an on-subnet peer
+- **Reflects allowlisted multicast** discovery/control between the two VLANs — VuNET amp discovery in the shipped profile
 - **Drops** PTP / multicast media toward Control; does not trunk SoundGrid
 
-**Install a device:** [`docs/setup.md`](docs/setup.md) — addresses, switch ports, DHCP, Raspberry Pi software, and first checks.
-Or prepare a self-provisioning **microSD card** at the bench: [`docs/sd-image.md`](docs/sd-image.md).
+Which side the clients sit on is one setting, `client_vlan`. Both shipped profiles use `client_vlan: dante`; the `control` alternative is described in [`docs/architecture.md`](docs/architecture.md#two-profiles).
+
+**Build a unit from a microSD card** (the normal path): [`docs/sd-image.md`](docs/sd-image.md). Stage the card at a bench, boot it on any LAN with DHCP, and it provisions itself and then **waits** — nothing is applied until you have checked it and run `combiner-go-live`, which reboots it onto its show addressing. A unit boots twice on purpose.
+
+**Or install by hand** on a Pi you already have: [`docs/setup.md`](docs/setup.md) — addresses, switch ports, DHCP, and first checks.
 
 ## Docs
 
@@ -27,7 +32,7 @@ Or prepare a self-provisioning **microSD card** at the bench: [`docs/sd-image.md
 | [`docs/protocols.md`](docs/protocols.md) | Vendor protocol notes |
 | [`docs/capture-playbook.md`](docs/capture-playbook.md) | Confirm Dante/Shure; capture Lake groups |
 | [`docs/break-glass.md`](docs/break-glass.md) | Combiner down |
-| [`docs/pi-prep.md`](docs/pi-prep.md) | Building binaries, Go, virgil01 lab board |
+| [`docs/pi-prep.md`](docs/pi-prep.md) | Building binaries, Go, virgil lab board |
 | [`docs/sd-image.md`](docs/sd-image.md) | Build a unit from a **microSD card** that provisions itself |
 | [`docs/productization.md`](docs/productization.md) | Future hardware (PoE, Sipeed) |
 | [`config/site.example.yaml`](config/site.example.yaml) | **Production** — audio trunk: clients on untagged Dante (PVID), amps on tagged Control |
@@ -40,7 +45,7 @@ Or prepare a self-provisioning **microSD card** at the bench: [`docs/sd-image.md
 
 **Raspberry Pi** (Debian / Raspberry Pi OS), single GbE trunk. Software is portable (static Go + systemd + YAML) for a later PoE / Sipeed GbE profile.
 
-Maintainers: push a `v*` tag to publish packages (`git tag v0.1.0 && git push origin v0.1.0`).
+Maintainers: push a `v*` tag to publish packages (`git tag v0.2.4 && git push origin v0.2.4`).
 
 ## Build (developers)
 
@@ -52,7 +57,7 @@ go build -o bin/combiner-status ./cmd/combiner-status
 Cross-compile:
 
 ```bash
-make build-pi           # linux/arm64 — aarch64 Pi OS (lab: virgil01)
+make build-pi           # linux/arm64 — aarch64 Pi OS (lab: virgil)
 make build-pi-arm       # linux/arm GOARM=7 — 32-bit Pi OS only
 make build-linux-amd64  # linux/amd64
 make package            # dist/*.tar.gz + SHA256SUMS (set VERSION=… as needed)
@@ -60,7 +65,7 @@ make package            # dist/*.tar.gz + SHA256SUMS (set VERSION=… as needed)
 
 ## CI / quality
 
-GitHub Actions runs the same gates as `make check` (gofmt, Go tests/builds, ruff/mypy/pytest for deploy generators, `generate-check`). Pushing a `v*` tag builds release packages.
+GitHub Actions runs the same gates as `make check` (gofmt, Go tests/builds, ruff/mypy/pytest for deploy generators, `shellcheck`, `generate-check`). Pushing a `v*` tag builds release packages.
 
 ```bash
 pip install -e ".[dev]"   # PyYAML + ruff, mypy, pytest
@@ -93,7 +98,7 @@ Release binaries are stamped, so a field unit can identify itself with no
 toolchain and no network:
 
 ```bash
-combiner -version          # 0.1.0
+combiner -version          # 0.2.4
 combiner-status -version
 ```
 

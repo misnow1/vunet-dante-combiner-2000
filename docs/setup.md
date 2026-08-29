@@ -6,7 +6,11 @@ How the box forwards packets, nftables, and the multicast reflector: [`architect
 
 ## What you are building
 
-Laptops and iPads sit on the **Martin Control** VLAN with the amps and mixer-control ports (VuNET, StageMix, MixPad). The combiner sits on a trunk to Control **and** Dante so Dante Controller, Lake, and Shure WWB on those same clients can reach Dante gear **without** putting Dante PTP or multicast audio onto Control.
+Laptops and iPads sit on **Dante Primary**, with the Lake, Dante and Shure gear. That is what makes Dante Controller fully functional — its metering tab and device config need L2 adjacency, which no amount of forwarding can supply. Shure WWB and Lake Controller are native there too.
+
+The combiner sits on a trunk to Dante **and** Martin Control, and carries **VuNET** the other way, so those same clients can reach the Martin amps **without** putting Dante PTP or multicast audio onto Control.
+
+This is the `client_vlan: dante` profile, which is what both shipped configs use. The alternative — clients on Control, Dante reflected to them, no Dante metering — is described in [`architecture.md`](architecture.md#two-profiles) and ships no example.
 
 The combiner does **not** run DHCP on Control or Dante. You configure that on the core.
 
@@ -24,12 +28,12 @@ Pick the profile that matches your combiner port, copy it to `/etc/combiner/site
 
 Example prefixes (`/21` on the audio nets):
 
-| Role | Example VLAN ID | Example prefix | Combiner IP | Interface (default profile) | Who else |
+| Role | Example VLAN ID | Example prefix | Combiner IP | Interface (shipped profile) | Who else |
 | --- | --- | --- | --- | --- | --- |
-| Martin Control | `200` | `10.200.0.0/21` | **`10.200.0.1`** | `eth0.200` (tagged) | PCs, iPads, amps, mixer-control NICs |
-| Dante Primary | `201` | `10.201.0.0/21` | **`10.201.0.1`** | `eth0` (untagged / PVID) | Lake, Dante devices, Shure receivers |
+| Martin Control | `200` | `10.200.0.0/21` | **`10.200.0.1`** | `eth0.200` (tagged) | Martin amps, mixer-control NICs |
+| Dante Primary | `201` | `10.201.0.0/21` | **`10.201.0.1`** | `eth0` (untagged / PVID) | **PCs and iPads**, Lake, Dante devices, Shure receivers |
 
-Exactly **one** VLAN may be untagged — a port has one PVID. In the default profile that is Dante, so its address lands directly on `eth0` and no `eth0.201` is created. Set it with `untagged: true`; keep `id: 201` anyway, since it documents the PVID and is still checked for uniqueness. Other tagged VLANs the port happens to carry are ignored — no interface is created for them, so the kernel drops those frames.
+Exactly **one** VLAN may be untagged — a port has one PVID. In the shipped profile that is Dante, so its address lands directly on `eth0` and no `eth0.201` is created. Set it with `untagged: true`; keep `id: 201` anyway, since it documents the PVID and is still checked for uniqueness. Other tagged VLANs the port happens to carry are ignored — no interface is created for them, so the kernel drops those frames.
 
 If a switch SVI already owns `.1`, pick the next free addresses and use **those** combiner IPs everywhere below (DHCP option 3, reservations). Keep combiner addresses **out of DHCP pools**.
 
@@ -57,7 +61,7 @@ Lab-only extra: a Pi uplink on a flat LAN uses [`config/site.lab-flat.example.ya
 
 | Port | Untagged / PVID | Tagged | Notes |
 | --- | --- | --- | --- |
-| **Combiner** | **Dante** (audio trunk, default profile) — or an unused dummy VLAN on a fully tagged port | Control (plus Dante if the port is fully tagged) | Gigabit. PoE optional. No SoundGrid. |
+| **Combiner** | **Dante** (audio trunk, shipped profile) — or an unused dummy VLAN on a fully tagged port | Control (plus Dante if the port is fully tagged) | Gigabit. PoE optional. No SoundGrid. |
 | **WAP** | Control | none | Same L2 as amps. Allow **broadcast** (MixPad). |
 | Wired FOH laptop | Control | none | |
 | Amp / mixer-control | Control | none | As today |
@@ -67,7 +71,7 @@ Do not use one SSID for Control and Dante.
 
 ### Audio trunk ports
 
-Sites that already run "audio trunk" ports — PVID 201 untagged with 200 (and others) tagged — need no switch change: drop the combiner on any such port and the default profile matches it. Tagging does not change the data plane. Every nftables rule and every reflector membership keys on the interface *name*, so untagged Dante on `eth0` behaves exactly like tagged Dante on `eth0.201`.
+Sites that already run "audio trunk" ports — PVID 201 untagged with 200 (and others) tagged — need no switch change: drop the combiner on any such port and the shipped profile matches it. Tagging does not change the data plane. Every nftables rule and every reflector membership keys on the interface *name*, so untagged Dante on `eth0` behaves exactly like tagged Dante on `eth0.201`.
 
 One caveat before you patch it in: **SSH and the status page are accepted on Control only** (`management_access`, below). On a real audio trunk that is fine, because Control is tagged and present. If the combiner lands on a plain PVID-201 **access** port with no tagged 200, `eth0.200` exists but carries nothing, and the box is reachable only by console — ICMP echo still answers on every interface, so a successful ping to the Dante address with no SSH is the signature of that mistake.
 
@@ -87,26 +91,30 @@ Until the combiner port is a real trunk, its Control interface (and Dante, on a 
 
 Serve DHCP from the **core**. Do not enable combiner DHCP on Control or Dante (`mgmt_dhcp.enabled: false` in the production example).
 
-### Control
+The clients live on **Dante**, so that is the scope that needs a gateway.
+
+### Dante (where the clients are)
 
 | Option | Name | Value |
 | --- | --- | --- |
-| 3 | Router | **Combiner Control IP** (example `10.200.0.1`) — **laptops and iPads** that run Dante Controller, WWB, or Lake |
+| 3 | Router | **Combiner Dante IP** (example `10.201.0.1`) — **laptops and iPads** that run VuNET |
 | 6 | DNS | **Omit** |
-| 1 | Subnet mask | Control prefix (example `255.255.248.0`) |
-| — | Pool | Exclude combiner Control IP (and any SVI) |
+| 1 | Subnet mask | Dante prefix (example `255.255.248.0`) |
+| — | Pool | Exclude combiner Dante IP (and any SVI) |
 
-**Amps and consoles** should not get that default gateway. They only talk on-link. Prefer static/no-GW, or a DHCP class that omits option 3. A shared pool with option 3 for everyone is the tradeoff: clients work; amps that honor a gateway get a route they should not use.
+**Dante devices, Lake and Shure receivers** should not get that default gateway. They only talk on-link, and Dante gear is meant to have no gateway at all. Prefer static/no-GW, or a DHCP class that omits option 3. A shared pool with option 3 for everyone is the tradeoff: clients reach the amps; Dante devices that honor a gateway get a route they should not use.
 
-**Do not** set option 3 to a switch SVI that routes into Dante.
+**Do not** set option 3 to a switch SVI that routes into Control.
 
-### Dante
+### Control (where the amps are)
 
 | Option | Name | Value |
 | --- | --- | --- |
 | 3 | Router | **Absent** |
 | 6 | DNS | Omit |
-| — | Pool | Exclude combiner Dante IP |
+| — | Pool | Exclude combiner Control IP |
+
+The amps need no gateway: the combiner SNATs VuNET traffic so they only ever see an on-subnet peer.
 
 Empty/static gateway on Dante gear is normal. That is why the combiner SNATs.
 
@@ -137,7 +145,7 @@ that was prepared at the bench installs with no Internet. If packages *are*
 missing and there is no mirror, it names them and stops without changing
 anything — stage them with `--offline-debs DIR` ([`pi-prep.md`](pi-prep.md)).
 
-Building binaries yourself, the `virgil01` lab board, and Go: [`pi-prep.md`](pi-prep.md). Installer failure modes: [`../deploy/pi/README.md`](../deploy/pi/README.md).
+Building binaries yourself, the `virgil` lab board, and Go: [`pi-prep.md`](pi-prep.md). Installer failure modes: [`../deploy/pi/README.md`](../deploy/pi/README.md).
 
 Prefer not to run the installer by hand? [`sd-image.md`](sd-image.md) prepares a
 card at the bench that provisions itself on first boot — validated before it is
@@ -158,9 +166,9 @@ curl -s http://127.0.0.1:8080/api/status | head
 
 `-check` is also the safe way to edit `site.yaml` later — it exits non-zero on a bad config, so `combiner -check -config /etc/combiner/site.yaml && sudo systemctl restart combiner` will not restart into a crash loop. Unknown or misspelled keys are hard errors: `untaged: true` fails instead of quietly configuring the wrong tagging.
 
-From a Control client: ping the combiner Control IP; open `http://<combiner-control-ip>:8080/`. VuNET / StageMix / MixPad should see devices without the combiner. Dante Controller / WWB / Lake need the combiner (discovery + SNAT). If VuNET works but Dante Controller does not, option 3 and the Control gateway are the first things to check.
+From a client: ping the combiner Dante IP; open `http://<combiner-dante-ip>:8080/`. Dante Controller / WWB / Lake should see devices **without** the combiner — they are native on this VLAN. VuNET needs the combiner (discovery reflection + SNAT). If Dante Controller works but VuNET does not, option 3 and the Dante gateway are the first things to check.
 
-On the default profile `ip -br addr` shows the Dante address on `eth0` and Control on `eth0.200` — there is no `eth0.201`, and that is correct.
+In the shipped profile `ip -br addr` shows the Dante address on `eth0` and Control on `eth0.200` — there is no `eth0.201`, and that is correct.
 
 On a live Dante network, PTP drop counters may be non-zero. That is healthy.
 

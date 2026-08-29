@@ -1,6 +1,6 @@
 # Raspberry Pi installer
 
-What `install.sh` does and how to recover when it fails. **Addresses, switch ports, DHCP, and the install commands to run:** **[`docs/setup.md`](../../docs/setup.md)**. Building binaries / Go / `virgil01`: [`docs/pi-prep.md`](../../docs/pi-prep.md).
+What `install.sh` does and how to recover when it fails. **Addresses, switch ports, DHCP, and the install commands to run:** **[`docs/setup.md`](../../docs/setup.md)**. Building binaries / Go / `virgil`: [`docs/pi-prep.md`](../../docs/pi-prep.md).
 
 Installs VLAN interfaces, optional lab Mgmt DHCP (`dnsmasq`), fail-closed `nftables`, and the `combiner` service on Debian / Raspberry Pi OS.
 
@@ -24,11 +24,13 @@ changes, so a failed run leaves no residue:
 5. Resolve runtime packages: skip `apt` entirely if nothing is missing, else
    install from `--offline-debs` or `apt`, else abort with the exact list.
 
-Only after all five does it load the module, disable `avahi`, install the
-binaries, and hand the config half to **`combiner-apply`**.
+Only after all five does it load the module, install the binaries, and hand the
+config half to **`combiner-apply`**. (Avahi is masked here too — but only when
+activation is not deferred; see below.)
 
-`install.sh` does one-time OS preparation — apt, the 8021q module, masking
-`avahi`, installing binaries and units, disabling NetworkManager. Everything
+`install.sh` does one-time OS preparation — apt, the 8021q module, installing
+binaries and units, and (unless activation is deferred) masking `avahi` and
+disabling NetworkManager. Everything
 derived from `site.yaml` — the ruleset, networkd units, hostname, Mgmt DHCP,
 forwarding — lives in `combiner-apply`, which also runs on every boot from
 `combiner-apply.service`. An install and a later re-home therefore run exactly
@@ -37,9 +39,10 @@ power cycle. See [`docs/sd-image.md`](../../docs/sd-image.md).
 
 ### Deferred activation
 
-`--defer-activation` stops short of the two steps that take the box off the
-network it is currently on: the NetworkManager → `systemd-networkd` handover,
-and enabling + running `combiner-apply`. Everything else runs normally.
+`--defer-activation` stops short of the three steps that would take the box off
+the network it is currently on, or make it harder to find there: the
+NetworkManager → `systemd-networkd` handover, enabling + running
+`combiner-apply`, and masking `avahi`. Everything else runs normally.
 
 That is what card provisioning uses. Provisioning needs a mirror, DHCP and DNS;
 a rack has none of those, so the first boot happens on a bench LAN — and a unit
@@ -52,7 +55,7 @@ and reboots.
 | | |
 | --- | --- |
 | `combiner-go-live` | validate the card's config, hand over the interfaces, enable the units, clear the hold, reboot. `--undo` reverses all of that and comes back on DHCP. `--status` reports held vs live; it reads nothing privileged but still wants `sudo` or a full path, since `/usr/local/sbin` is not on a normal user's PATH (`combiner-status` is, and reports the hold too) |
-| `combiner-led` | drive the activity LED (`provisioning` / `ready` / `failed` / `running` / `auto`). Best-effort: a host with no LED is a silent success |
+| `combiner-led` | drive the activity LED (`provisioning` / `ready` / `failed` / `running` / `off` / `auto`). Best-effort: a host with no LED is a silent success |
 | `combiner-signal.service` | runs `combiner-led auto` late in every boot, so the LED reports the state the unit actually reached |
 
 `combiner-seal` is happy to seal a **held** unit — that is the normal golden
@@ -109,24 +112,24 @@ vlans:
 
 Result: `10-combiner-trunk.network` carries `Address=10.201.0.1/21` plus `VLAN=eth0.200`, and only `20-combiner-control.netdev` is written.
 
-**Untagged Mgmt (flat lab LAN)** — lab boards on an access/native port (e.g. `virgil01` on `192.168.1.x`) use [`config/site.lab-flat.example.yaml`](../../config/site.lab-flat.example.yaml). That Mgmt face is a **Pi uplink**, not the client network. Production clients live on Control.
+**Untagged Mgmt (flat lab LAN)** — lab boards on an access/native port (e.g. `virgil` on `192.168.33.x`) use [`config/site.lab-flat.example.yaml`](../../config/site.lab-flat.example.yaml). That Mgmt face is a **Pi uplink**, not the client network. Production clients live on whichever VLAN `client_vlan` names — Dante, in both shipped profiles.
 
 ```yaml
 vlans:
   mgmt:
     id: 1                    # switch PVID / native VLAN id (docs + uniqueness)
-    address: 192.168.1.2
+    address: 192.168.33.212
     prefix: 24
     untagged: true
-    gateway: 192.168.1.1     # lab only — see below
-    dns: [192.168.1.1]
+    gateway: 192.168.33.1    # lab only — see below
+    dns: [192.168.33.1]
   control: { ... }           # still tagged eth0.<id>
   dante: { ... }
 ```
 
 Mgmt L3 lands on `physical_interface` (no `eth0.<mgmt-id>`); Control and Dante stay 802.1Q subinterfaces. Switch port: untagged Mgmt + tagged Control/Dante, or a temporary access port for Mgmt-only smoke tests.
 
-**`gateway` / `dns` are lab-only** for the Pi’s own uplink. They are never advertised to Control clients.
+**`gateway` / `dns` are lab-only** for the Pi’s own uplink. They are never advertised to the audio VLANs' clients.
 
 Reserve the Mgmt address in the LAN router so nothing else claims it.
 
@@ -191,7 +194,7 @@ the current network — the handover waits for `combiner-go-live`.
 8. **Enables IP forwarding last**
 9. Confirms `combiner` is still active a few seconds after start
 
-Avahi is disabled/masked so it does not fight the reflector on UDP 5353. The install aborts if `NetworkManager` or `dhcpcd` survive the disable step, since either one silently prevents `systemd-networkd` from creating VLANs.
+Avahi is disabled/masked so it does not fight the reflector on UDP 5353 — but only on a non-deferred install. A held unit runs no reflector, and mDNS is what makes it findable on a DHCP address nobody chose, so `combiner-go-live` masks avahi at the handover instead and `--undo` unmasks it. The install aborts if `NetworkManager` or `dhcpcd` survive the disable step, since either one silently prevents `systemd-networkd` from creating VLANs.
 
 Steps 3–9 are what `--defer-activation` skips; `combiner-go-live` runs them on
 the next boot instead, by way of `combiner-apply.service`.
@@ -256,13 +259,13 @@ Installing `systemd-resolved` repoints `/etc/resolv.conf` at `/run/systemd/resol
 
 ## Switch port
 
-Production trunk, WAP, and DHCP: **[`docs/setup.md`](../../docs/setup.md)**. Lab untagged Mgmt is described under [Untagged Mgmt](#untagged-mgmt-native-vlan--flat-lab-lan) above.
+Production trunk, WAP, and DHCP: **[`docs/setup.md`](../../docs/setup.md)**. Lab untagged Mgmt is described under [Untagged VLANs (native / PVID)](#untagged-vlans-native--pvid) above.
 
 ## Clients
 
 - Production: Control SSID/access; status at `http://<control-ip>:8080/`
 - Combiner DHCP is off unless `vlans.mgmt` exists and `mgmt_dhcp.enabled` is true
-- `combiner.local` is not provided unless you add your own mDNS elsewhere
+- `combiner.local` answers only while a unit is **held**; `combiner-go-live` masks avahi, so a live unit provides no mDNS unless you add your own elsewhere
 
 ## Verify
 

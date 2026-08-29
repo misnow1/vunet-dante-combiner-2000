@@ -1,22 +1,26 @@
 # Traffic matrix
 
-Default posture: **deny**, then allow only what the combiner must stitch. Clients live on **Martin Control**; VuNET / Yamaha mixer-control / A&H MixPad are native L2 there. The reflector copies **Dante + Shure** (and Lake after capture) onto Control. Install: [`setup.md`](setup.md). Protocol citations: [`protocols.md`](protocols.md).
+Default posture: **deny**, then allow only what the combiner must stitch.
 
-Fill Lake (and optional VuNET documentation) from on-site captures ([`capture-playbook.md`](capture-playbook.md)).
+In the shipped profile (`client_vlan: dante`) clients live on **Dante Primary**: Dante Controller, Shure WWB and Lake are native L2 there and need no allowlist at all. The reflector copies **Martin VuNET** the other way, onto Dante, so the same client can reach the amps. That is the *only* allowlist either shipped config loads.
+
+The `client_vlan: control` alternative inverts this — clients on Control, with Dante/Shure/Lake reflected to them — and its allowlists are documented further down, marked as such. Which profile you are on decides which half of this page applies. Install: [`setup.md`](setup.md). Protocol citations: [`protocols.md`](protocols.md). Why: [`architecture.md`](architecture.md#two-profiles).
 
 ## VLAN pair policy
 
+Rows read for the shipped `client_vlan: dante` profile; under `client_vlan: control` the client and peer roles swap.
+
 | Src → Dst | Unicast | Multicast |
 | --- | --- | --- |
-| Control → Dante | Allow + SNAT to combiner Dante IP | **Never kernel-forward** — userspace reflector, allowlisted groups only |
-| Dante → Control | Allow established/related (conntrack) | Reflect allowlisted groups only |
+| Dante → Control (**client → peer**) | Allow + SNAT to combiner Control IP | **Never kernel-forward** — userspace reflector, allowlisted groups only |
+| Control → Dante (**peer → client**) | Allow established/related (conntrack) | Reflect allowlisted groups only |
 | Optional Mgmt → Control | Allow + SNAT to combiner Control IP (lab/status) | **Drop** in `forward` — reflector does not join Mgmt |
 | Optional Mgmt → Dante | Allow + SNAT to combiner Dante IP (lab) | **Drop** in `forward` |
 | Any → Control (or Mgmt) carrying PTP or media mcast | **Drop** | **Drop** |
 | Any forwarded multicast (`224.0.0.0/4`) or limited broadcast | **Drop** in `forward` | Reflector is the sole cross-VLAN multicast path |
 | Combiner ↔ SoundGrid | **Never attached** | **Never** |
 
-New Control→Dante sessions are client-initiated (Dante Controller, WWB, Lake). Amps without a default route should not originate Dante unicast.
+New client→peer sessions are client-initiated — VuNET, in the shipped profile. Martin amps have no default route and should never originate cross-VLAN unicast; SNAT is what makes that unnecessary, because every session they see already looks on-subnet.
 
 ## Hard deny (never forward or reflect toward Control / Mgmt)
 
@@ -27,11 +31,24 @@ New Control→Dante sessions are client-initiated (Dante Controller, WWB, Lake).
 | `239.69.0.0/16` | UDP 5004 | AES67 multicast audio |
 | `239.254.3.3` | UDP 9998 | PTP logging (if enabled) |
 
-These denials protect Martin amp NICs and Control-SSID Wi-Fi. Discovery/control groups below **are** reflected onto Control by design (light compared with PTP).
+These denials protect Martin amp NICs, and they stay anchored to **Control** whichever way `client_vlan` points — they exist to keep the amp stack quiet, not to protect whichever side the client is on. Discovery/control groups below **are** reflected by design (light compared with PTP).
 
 **SoundGrid / SoE** is not a deny prefix: the combiner must not trunk that VLAN. See [`protocols.md`](protocols.md) § Waves SoundGrid.
 
-## Dante — allow (seeded from Audinate docs)
+## VuNET / Martin — allow (the shipped profile's only allowlist)
+
+Under `client_vlan: dante` the amps are the reflected peer. Measured on a live rig (12 WPC amps, 2026-08-23) — see [`protocols.md`](protocols.md#measured-behaviour-12-wpc-amps-2026-08-23) and [`config/allowlists/vunet.yaml`](../config/allowlists/vunet.yaml).
+
+| Address | Ports | Type | Purpose |
+| --- | --- | --- | --- |
+| `239.254.10.2` | UDP 6002, 54077 | Multicast | Amp discovery — TTL 1; amps announce 91-byte with src port == dst port, VuNET queries 23-byte from an ephemeral port |
+| (unicast any) | TCP **63489** | Unicast | Amp control session — client-initiated, long-lived, no explicit teardown |
+
+The allowlist entry is `vlan: control` because the field names the **peer** role, not the client's. Under `client_vlan: control` this group must **not** be allowlisted: clients would already share Control with the amps, so reflecting it would hairpin Control onto itself, and the config loader rejects it.
+
+## Dante — allow (`client_vlan: control` only)
+
+> Not loaded by either shipped profile. Under `client_vlan: dante` the client is already on Dante and needs none of this reflected; the loader rejects it.
 
 See also [`config/allowlists/dante.yaml`](../config/allowlists/dante.yaml).
 
@@ -47,7 +64,9 @@ Unicast rows are SNAT/forwarding, not the multicast reflector. Metering (8751) i
 
 **Do not reflect** ATP/AES67 media groups or PTP.
 
-## Shure Wireless Workbench — allow (Dante VLAN)
+## Shure Wireless Workbench — allow (`client_vlan: control` only)
+
+> Not loaded by either shipped profile — WWB is native to the client's own VLAN there.
 
 WWB rides Dante with the wireless gear. See [`config/allowlists/shure.yaml`](../config/allowlists/shure.yaml) and [`protocols.md`](protocols.md).
 
@@ -60,16 +79,9 @@ WWB rides Dante with the wireless gear. See [`config/allowlists/shure.yaml`](../
 
 Do **not** seed SSDP (`239.255.255.250:1900`) unless a capture shows WWB needs it. Shure Dante cards still originate PTP/media — those stay on the deny floor.
 
-## VuNET / Martin — native Control (not reflected)
+## Lake Controller — allow (`client_vlan: control` only)
 
-Clients share the Control VLAN with the amps. No VuNET allowlist on the reflector.
-
-| Address | Ports | Type | Purpose | Status |
-| --- | --- | --- | --- | --- |
-| (on-link) | vendor | Unicast / whatever VuNET uses | Amp control | Native L2 |
-| _optional capture_ | _TBD_ | Multicast / broadcast | Documentation only | [`capture-playbook.md`](capture-playbook.md) |
-
-## Lake Controller — allow (capture required)
+> Not loaded by either shipped profile — Lake is native to the client's own VLAN there.
 
 Lake control rides the **Dante** VLAN (static IPv4 on the Dante subnet).
 
@@ -82,7 +94,7 @@ Placeholder: [`config/allowlists/lake.yaml`](../config/allowlists/lake.yaml).
 
 Until Lake groups are known, mDNS (`224.0.0.251`) reflection on Control↔Dante may help if Lake uses DNS-SD; verify with capture. Do not reflect all broadcast.
 
-## Console control on Control (not reflected)
+## Console control on Control (never reflected)
 
 | Vendor | Discovery | Unicast (typical) | Combiner |
 | --- | --- | --- | --- |

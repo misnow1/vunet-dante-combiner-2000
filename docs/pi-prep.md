@@ -1,8 +1,8 @@
 # Build binaries and lab boards
 
-If you are installing a combiner on a show network, start at **[`setup.md`](setup.md)** (addresses, switch, DHCP, release tarball, `install.sh`). This page is for **developers**: matching `arm` vs `arm64`, Go, cross-compile, and the `virgil01` lab Pi.
+If you are installing a combiner on a show network, start at **[`setup.md`](setup.md)** (addresses, switch, DHCP, release tarball, `install.sh`). This page is for **developers**: matching `arm` vs `arm64`, Go, cross-compile, and the `virgil` lab Pi.
 
-**Lab board:** Raspberry Pi **3** `virgil01` at `192.168.1.2`, **64-bit** Raspberry Pi OS (`uname -m` → `aarch64`). Use the **`linux-arm64` release tarball**, or **`make build-pi`**. Prefer Pi **4/5** for production trunks (GbE); Pi 3 is 100 Mbps and short on RAM for on-device `go build`.
+**Lab board:** Raspberry Pi **3** `virgil` at `192.168.33.212`, **64-bit** Raspberry Pi OS (`uname -m` → `aarch64`). Use the **`linux-arm64` release tarball**, or **`make build-pi`**. Prefer Pi **4/5** for production trunks (GbE); Pi 3 is 100 Mbps and short on RAM for on-device `go build`.
 
 ## Ways to get binaries onto the Pi
 
@@ -31,7 +31,7 @@ getconf LONG_BIT
 
 | Result | Typical OS | Release asset / cross-compile |
 | --- | --- | --- |
-| `aarch64` / `arm64`, 64-bit | 64-bit Raspberry Pi OS (**lab: `virgil01`**) | `*-linux-arm64.tar.gz` / `make build-pi` |
+| `aarch64` / `arm64`, 64-bit | 64-bit Raspberry Pi OS (**lab: `virgil`**) | `*-linux-arm64.tar.gz` / `make build-pi` |
 | `armv7l` / `armhf`, 32-bit | Older 32-bit Pi OS images | `*-linux-arm.tar.gz` / `make build-pi-arm` |
 | `x86_64` / `amd64` | Debian/Ubuntu x86_64 | `*-linux-amd64.tar.gz` / `make build-linux-amd64` |
 
@@ -45,7 +45,7 @@ Match the binary to the OS. A `linux/arm` binary will not run on `aarch64` Pi OS
 2. On the Pi:
 
 ```bash
-# Example for virgil01 / aarch64 — replace VERSION (no leading v)
+# Example for virgil / aarch64 — replace VERSION (no leading v)
 curl -fsSL -o combiner.tgz \
   https://github.com/misnow1/vunet-dante-combiner-2000/releases/download/vVERSION/vunet-dante-combiner-VERSION-linux-arm64.tar.gz
 tar -xzf combiner.tgz
@@ -55,7 +55,7 @@ cd vunet-dante-combiner-VERSION-linux-arm64
 
 The tree already has `bin/combiner`, `bin/combiner-status`, `config/`, and `deploy/pi/`. Field install continues in [`setup.md`](setup.md). Installer troubleshooting: [`../deploy/pi/README.md`](../deploy/pi/README.md).
 
-Maintainers publish packages by pushing a tag: `git tag v0.1.0 && git push origin v0.1.0`.
+Maintainers publish packages by pushing a tag: `git tag v0.2.4 && git push origin v0.2.4`.
 
 ---
 
@@ -178,7 +178,7 @@ No `COMBINER_*` environment variables are used today.
 From the repo root:
 
 ```bash
-# Lab default: aarch64 (virgil01 and any 64-bit Pi OS)
+# Lab default: aarch64 (virgil and any 64-bit Pi OS)
 make build-pi
 # → bin/combiner-linux-arm64 , bin/combiner-status-linux-arm64
 
@@ -193,14 +193,14 @@ make build-linux-amd64
 make package VERSION=0.0.0-dev
 ```
 
-Copy to `virgil01`. `install.sh` expects plain names `bin/combiner` and `bin/combiner-status` (release packages already use those names):
+Copy to `virgil`. `install.sh` expects plain names `bin/combiner` and `bin/combiner-status` (release packages already use those names):
 
 ```bash
 # From laptop
-scp bin/combiner-linux-arm64 mpsllc@192.168.1.2:~/combiner
-scp bin/combiner-status-linux-arm64 mpsllc@192.168.1.2:~/combiner-status
+scp bin/combiner-linux-arm64 combiner@192.168.33.212:~/combiner
+scp bin/combiner-status-linux-arm64 combiner@192.168.33.212:~/combiner-status
 
-# On virgil01
+# On virgil
 mkdir -p ~/vunet-dante-combiner-2000/bin
 mv ~/combiner ~/combiner-status ~/vunet-dante-combiner-2000/bin/
 ```
@@ -224,7 +224,7 @@ Or rsync/scp from your laptop. Then either build on-device or drop prebuilt bina
 
 ## Minimal lab config (no production trunk yet)
 
-For first smoke tests on a single LAN (`virgil01` at `192.168.1.2`), use [`config/site.lab-flat.example.yaml`](../config/site.lab-flat.example.yaml) (optional untagged Mgmt). Production is [`config/site.example.yaml`](../config/site.example.yaml) (audio trunk: clients on untagged Dante, amps on tagged Control); if the port has no untagged VLAN at all, make the one-line change its `dante:` block documents. Until the switch is ready:
+For first smoke tests on a single LAN (`virgil` at `192.168.33.212`), use [`config/site.lab-flat.example.yaml`](../config/site.lab-flat.example.yaml) (optional untagged Mgmt). Production is [`config/site.example.yaml`](../config/site.example.yaml) (audio trunk: clients on untagged Dante, amps on tagged Control); if the port has no untagged VLAN at all, make the one-line change its `dante:` block documents. Until the switch is ready:
 
 1. Use a release tree or cross-compiled binaries and run `./bin/combiner -check -config config/site.example.yaml`
 2. Generate nftables only: `python3 deploy/pi/generate-nftables.py config/site.example.yaml /tmp/nft.conf && sudo nft -c -f /tmp/nft.conf`
@@ -236,7 +236,7 @@ Edit `site.yaml` with real VLAN IDs and addresses before a full install. Combine
 
 ## Checklist before `install.sh`
 
-- [ ] OS architecture known; binaries match (`arm64` for `virgil01` / `aarch64`)
+- [ ] OS architecture known; binaries match (`arm64` for `virgil` / `aarch64`)
 - [ ] `python3` + `python3-yaml` available
 - [ ] `nft` available (`nftables` package)
 - [ ] Release tree **or** repo with `bin/combiner` + `bin/combiner-status` (or `go` to build them)

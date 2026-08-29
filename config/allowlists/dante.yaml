@@ -1,4 +1,10 @@
 # Dante discovery / control multicast — seeded from Audinate network admin docs.
+#
+# NOT loaded by either shipped profile. Both use client_vlan: dante, where the
+# client already shares this VLAN and reflecting these groups would hairpin
+# Dante onto itself — the loader rejects it. This is for the client_vlan:
+# control alternative.
+#
 # Do NOT add PTP or media groups here.
 
 name: dante

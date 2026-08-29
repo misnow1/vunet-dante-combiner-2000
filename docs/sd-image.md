@@ -281,20 +281,29 @@ of truth**, and `combiner-apply` re-reads it on every boot.
 
 Editing it over SSH on the unit works too, if you can still reach it.
 
-Note that re-running the full `prep-card.sh` (rather than editing the file in
-place) re-stages the card completely, which includes re-arming the hold — so
-that unit provisions again and waits for another `combiner-go-live`. That is
-usually what you want when a card changes hands; use a plain file edit when it
-is not.
+Re-running the full `prep-card.sh` (rather than editing the file in place)
+re-arms the hold, so the unit waits for another `combiner-go-live` before it
+applies anything. It does **not** re-provision: `/var/lib/combiner/provisioned`
+lives on the root filesystem, which `prep-card.sh` never touches, so the next
+boot reuses the software already installed. That is usually what you want when
+a card changes hands — new config, new verification, same known-good build.
 
-### Re-staging really does re-provision
+It also means **`--version` is not an upgrade lever** on a card whose root has
+already provisioned. To move a unit to a new release, re-flash the card (see
+[Updating a racked unit](#updating-a-racked-unit)).
+
+### What re-staging does and does not redo
 
 cloud-init runs `users`, `runcmd` and everything else that provisions a box
 exactly **once per instance-id**, and Raspberry Pi Imager pins that id in two
 places: `meta-data` on the seed, and `ds=nocloud;i=<id>` on the **kernel command
 line**, where it takes precedence. `prep-card.sh` rewrites both, so re-staging a
-card genuinely means "provision this again". Changing only `meta-data` is
-silently ineffective — the card looks freshly staged and provisions nothing.
+card genuinely re-runs cloud-init. Changing only `meta-data` is silently
+ineffective — the card looks freshly staged and cloud-init skips it entirely.
+
+What cloud-init then re-runs is `combiner-firstboot.sh`, and that stops at
+`/var/lib/combiner/provisioned` on an already-provisioned root. So re-staging
+gives you a fresh config and a fresh hold, not a fresh install.
 
 Re-staging also re-writes the `combiner-provisioning` marker, so a re-staged
 card holds on its next boot even if that unit had already gone live once. A card
@@ -375,9 +384,27 @@ edges](https://github.com/raspberrypi/rpi-image-gen/issues/182).
 
 ## Read-only root
 
-A racked combiner is powered off by pulling the rack. Once a unit has been
-sealed and cloned, `combiner-finalize` locks its root filesystem read-only, so
-there is no in-flight write for a hard cut to corrupt.
+A racked combiner is powered off by pulling the rack, so its root filesystem is
+locked read-only before it goes in: there is no in-flight write for a hard cut
+to corrupt. `combiner-finalize` does the locking, at boot, and something has to
+arm it first.
+
+For **a single unit going into a rack as itself**, that is `combiner-lock`:
+
+```bash
+sudo combiner-lock            # arm; the next boot locks and reboots once more
+sudo combiner-lock --status   # root now, next boot, armed?, overlayroot present?
+sudo combiner-lock --off      # release it; writable again after the next boot
+```
+
+Arming preflights at the bench, where you are watching: it refuses a unit with
+no machine-id or host keys of its own, or whose `/etc/combiner/site.yaml` does
+not validate. `--status` reports "root now" and "next boot" separately, because
+after either operation they differ for a whole boot.
+
+For **a card that will be cloned onto spares**, `combiner-seal` arms the same
+mechanism as part of stripping the unit's identity — see
+[`deploy/pi/README.md`](../deploy/pi/README.md).
 
 ```
 root:  overlay  lowerdir=/media/root-ro  upperdir=/media/root-rw/overlay
@@ -414,6 +441,9 @@ It refuses to lock, and retries on the next boot, when:
   precisely so locking needs no network
 
 ### Unlocking for maintenance
+
+The short version is `sudo combiner-lock --off && sudo reboot`. The longer
+routes below still work and are worth knowing when the unit will not boot.
 
 Locking is one token on the kernel command line, so it is reversible from a
 laptop with nothing but the card:

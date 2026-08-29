@@ -27,7 +27,7 @@ Or prepare a self-provisioning **microSD card** at the bench: [`docs/sd-image.md
 | [`docs/protocols.md`](docs/protocols.md) | Vendor protocol notes |
 | [`docs/capture-playbook.md`](docs/capture-playbook.md) | Confirm Dante/Shure; capture Lake groups |
 | [`docs/break-glass.md`](docs/break-glass.md) | Combiner down |
-| [`docs/pi-prep.md`](docs/pi-prep.md) | Building binaries, Go, virgil01 lab board |
+| [`docs/pi-prep.md`](docs/pi-prep.md) | Building binaries, Go, virgil lab board |
 | [`docs/sd-image.md`](docs/sd-image.md) | Build a unit from a **microSD card** that provisions itself |
 | [`docs/productization.md`](docs/productization.md) | Future hardware (PoE, Sipeed) |
 | [`config/site.example.yaml`](config/site.example.yaml) | **Production** — audio trunk: clients on untagged Dante (PVID), amps on tagged Control |
@@ -40,7 +40,7 @@ Or prepare a self-provisioning **microSD card** at the bench: [`docs/sd-image.md
 
 **Raspberry Pi** (Debian / Raspberry Pi OS), single GbE trunk. Software is portable (static Go + systemd + YAML) for a later PoE / Sipeed GbE profile.
 
-Maintainers: push a `v*` tag to publish packages (`git tag v0.1.0 && git push origin v0.1.0`).
+Maintainers: push a `v*` tag to publish packages (`git tag v0.2.4 && git push origin v0.2.4`).
 
 ## Build (developers)
 
@@ -52,7 +52,7 @@ go build -o bin/combiner-status ./cmd/combiner-status
 Cross-compile:
 
 ```bash
-make build-pi           # linux/arm64 — aarch64 Pi OS (lab: virgil01)
+make build-pi           # linux/arm64 — aarch64 Pi OS (lab: virgil)
 make build-pi-arm       # linux/arm GOARM=7 — 32-bit Pi OS only
 make build-linux-amd64  # linux/amd64
 make package            # dist/*.tar.gz + SHA256SUMS (set VERSION=… as needed)
@@ -60,7 +60,7 @@ make package            # dist/*.tar.gz + SHA256SUMS (set VERSION=… as needed)
 
 ## CI / quality
 
-GitHub Actions runs the same gates as `make check` (gofmt, Go tests/builds, ruff/mypy/pytest for deploy generators, `generate-check`). Pushing a `v*` tag builds release packages.
+GitHub Actions runs the same gates as `make check` (gofmt, Go tests/builds, ruff/mypy/pytest for deploy generators, `shellcheck`, `generate-check`). Pushing a `v*` tag builds release packages.
 
 ```bash
 pip install -e ".[dev]"   # PyYAML + ruff, mypy, pytest
@@ -93,7 +93,7 @@ Release binaries are stamped, so a field unit can identify itself with no
 toolchain and no network:
 
 ```bash
-combiner -version          # 0.1.0
+combiner -version          # 0.2.4
 combiner-status -version
 ```
 

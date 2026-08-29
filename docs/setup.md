@@ -137,7 +137,7 @@ that was prepared at the bench installs with no Internet. If packages *are*
 missing and there is no mirror, it names them and stops without changing
 anything — stage them with `--offline-debs DIR` ([`pi-prep.md`](pi-prep.md)).
 
-Building binaries yourself, the `virgil01` lab board, and Go: [`pi-prep.md`](pi-prep.md). Installer failure modes: [`../deploy/pi/README.md`](../deploy/pi/README.md).
+Building binaries yourself, the `virgil` lab board, and Go: [`pi-prep.md`](pi-prep.md). Installer failure modes: [`../deploy/pi/README.md`](../deploy/pi/README.md).
 
 Prefer not to run the installer by hand? [`sd-image.md`](sd-image.md) prepares a
 card at the bench that provisions itself on first boot — validated before it is

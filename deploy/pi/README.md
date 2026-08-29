@@ -51,7 +51,7 @@ and reboots.
 
 | | |
 | --- | --- |
-| `combiner-go-live` | validate the card's config, hand over the interfaces, enable the units, clear the hold, reboot. `--undo` reverses all of that and comes back on DHCP. `--status` reports held vs live and needs no root |
+| `combiner-go-live` | validate the card's config, hand over the interfaces, enable the units, clear the hold, reboot. `--undo` reverses all of that and comes back on DHCP. `--status` reports held vs live; it reads nothing privileged but still wants `sudo` or a full path, since `/usr/local/sbin` is not on a normal user's PATH (`combiner-status` is, and reports the hold too) |
 | `combiner-led` | drive the activity LED (`provisioning` / `ready` / `failed` / `running` / `auto`). Best-effort: a host with no LED is a silent success |
 | `combiner-signal.service` | runs `combiner-led auto` late in every boot, so the LED reports the state the unit actually reached |
 

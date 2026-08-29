@@ -58,6 +58,22 @@ say() { echo "combiner-seal: $*"; }
 
 [[ "$(id -u)" -eq 0 ]] || die "run as root"
 
+# Refuse on a unit whose root is locked read-only. Every step below writes to
+# /etc or /var — truncating machine-id, removing host keys and the random seed,
+# removing site.yaml. Under an overlay those all land in tmpfs: seal would print
+# its whole success output, tell you to image the card, and every change would
+# evaporate on reboot. The card you then cloned would carry an identity that was
+# never cleared, giving a fleet one machine-id and one set of SSH host keys —
+# exactly what this script exists to prevent, while appearing to have worked.
+if grep -q 'overlayroot=tmpfs' /proc/cmdline 2>/dev/null; then
+  die "this unit's root is read-only, so nothing written here would survive a reboot.
+Release it first, then seal:
+
+    combiner-lock --off
+    sudo reboot
+    sudo combiner-seal"
+fi
+
 if [[ "$DRY_RUN" -eq 0 && "$ASSUME_YES" -eq 0 ]]; then
   [[ -t 0 ]] || die "not a terminal — pass --yes to proceed non-interactively"
   echo "This clears this unit's identity: machine-id, SSH host keys, random"

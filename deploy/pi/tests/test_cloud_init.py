@@ -586,3 +586,18 @@ def test_lock_off_keeps_cmdline_single_line() -> None:
     text = LOCK.read_text()
     assert "wc -l" in text
     assert "multi-line cmdline.txt" in text
+
+
+def test_seal_refuses_a_locked_root() -> None:
+    """Every step seal takes writes to /etc or /var. Under a read-only overlay
+    those land in tmpfs, so seal would report success and then be undone by the
+    next reboot — and the card cloned from it would carry an identity that was
+    never cleared, giving the whole fleet one machine-id and one set of host
+    keys. Silent, and the exact failure seal exists to prevent."""
+    text = SEAL.read_text()
+    assert "overlayroot=tmpfs' /proc/cmdline" in text
+    assert "combiner-lock --off" in text
+    # The guard must come before anything destructive.
+    guard = text.index("overlayroot=tmpfs' /proc/cmdline")
+    first_write = text.index("truncate -s 0 /etc/machine-id")
+    assert guard < first_write, "the guard must precede the first write"

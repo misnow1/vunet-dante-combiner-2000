@@ -158,7 +158,15 @@ for f in /etc/systemd/network/*combiner*.netdev /etc/systemd/network/*combiner*.
 done
 diff -r -q "$STAGING/systemd/network" "$LIVE_NET" >/dev/null 2>&1 || CHANGES+=("networkd units")
 
-[[ "$(cat /etc/hostname 2>/dev/null || true)" == "$COMBINER_HOSTNAME" ]] || CHANGES+=("hostname")
+# Both halves of the unit's name, checked together and reported as one change.
+# Without the /etc/hosts half, a unit that is otherwise up to date exits on "no
+# change" below and keeps a stale entry forever — which is how every already
+# deployed unit would have stayed broken.
+etc_hosts_name() { awk '$1 == "127.0.1.1" { print $NF; exit }' /etc/hosts 2>/dev/null; }
+if [[ "$(cat /etc/hostname 2>/dev/null || true)" != "$COMBINER_HOSTNAME" ||
+      "$(etc_hosts_name)" != "$COMBINER_HOSTNAME" ]]; then
+  CHANGES+=("hostname")
+fi
 
 if [[ ${#CHANGES[@]} -eq 0 && "$FORCE" -eq 0 ]]; then
   say "no change: $CONFIG already applied"
@@ -224,6 +232,22 @@ cp -a "$STAGING/systemd/network/." /etc/systemd/network/
 
 echo "$COMBINER_HOSTNAME" >/etc/hostname
 hostnamectl set-hostname "$COMBINER_HOSTNAME" 2>/dev/null || hostname "$COMBINER_HOSTNAME"
+
+# sudo resolves its own hostname on EVERY invocation and warns loudly when it
+# cannot, so a 127.0.1.1 line left pointing at the image's original name makes
+# a perfectly healthy appliance greet everyone with a resolver error. Debian's
+# convention is that this line tracks the hostname; keep it in step.
+#
+# The whole line is replaced rather than edited in place: this is a
+# single-purpose appliance whose name comes from the card, and preserving
+# aliases nobody set is not worth the parsing.
+if [[ -f /etc/hosts ]]; then
+  if grep -q '^127\.0\.1\.1' /etc/hosts; then
+    sed -i "s/^127\.0\.1\.1.*/127.0.1.1\t$COMBINER_HOSTNAME/" /etc/hosts
+  else
+    printf '127.0.1.1\t%s\n' "$COMBINER_HOSTNAME" >>/etc/hosts
+  fi
+fi
 
 systemctl restart systemd-networkd
 networkctl reload 2>/dev/null || true

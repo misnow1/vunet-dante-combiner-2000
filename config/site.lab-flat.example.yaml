@@ -1,8 +1,8 @@
 # Lab config for a flat LAN that already has DHCP and no VLAN trunk yet.
 # Matches the RPi 3 test board (virgil, eth0 = 192.168.33.212/24).
 #
-# Optional Mgmt is UNTAGGED on eth0 (Pi uplink only). Production clients
-# live on Control — see site.example.yaml. Reflector is Control↔Dante.
+# Optional Mgmt is UNTAGGED on eth0 (Pi uplink only). Production clients live
+# on Dante, as they do here — see site.example.yaml. Reflector is Control↔Dante.
 #
 #   - Mgmt DHCP is DISABLED — the existing LAN router keeps serving DHCP
 #   - Mgmt declares gateway/dns so the Pi keeps its uplink once networkd

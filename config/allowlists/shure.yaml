@@ -1,5 +1,9 @@
 # Shure Wireless Workbench discovery — Dante VLAN.
-# WWB/control apps sit on Control; this group is reflected Control↔Dante.
+#
+# NOT loaded by either shipped profile. Both use client_vlan: dante, where WWB
+# is native to the client's own VLAN and needs no reflection. This is for the
+# client_vlan: control alternative, where control apps sit on Control and this
+# group is reflected to them.
 # mDNS 224.0.0.251:5353 is already in dante.yaml — do not duplicate.
 # Do NOT add PTP, ATP, AES67, or SSDP here.
 

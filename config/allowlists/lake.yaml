@@ -1,4 +1,9 @@
 # Lake Controller discovery — FILL FROM CAPTURE
+#
+# NOT loaded by either shipped profile. Both use client_vlan: dante, where Lake
+# is native to the client's own VLAN. This is for the client_vlan: control
+# alternative.
+#
 # Lake frames use static IPv4 on the Dante subnet in this design.
 # See docs/capture-playbook.md (Dante VLAN with Lake Controller open).
 

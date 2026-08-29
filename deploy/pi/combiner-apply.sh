@@ -14,8 +14,10 @@
 # all forwarding, load the ruleset, only then re-enable forwarding.
 set -euo pipefail
 
-BOOT_CONFIG="/boot/firmware/combiner-site.yaml"
-[[ -d /boot/firmware ]] || BOOT_CONFIG="/boot/combiner-site.yaml"
+BOOT_DIR="/boot/firmware"
+[[ -d "$BOOT_DIR" ]] || BOOT_DIR="/boot"
+BOOT_CONFIG="$BOOT_DIR/combiner-site.yaml"
+HOLD_MARKER="$BOOT_DIR/combiner-provisioning"
 ETC_CONFIG="/etc/combiner/site.yaml"
 LIBDIR="/usr/local/lib/combiner"
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -60,6 +62,22 @@ say() { echo "combiner-apply: $*"; }
 LOGDIR="$(dirname "$BOOT_CONFIG")"
 if [[ -d "$LOGDIR" && -w "$LOGDIR" ]]; then
   exec > >(tee -a "$LOGDIR/combiner-apply.log") 2>&1
+fi
+
+# Provisioning hold. First boot runs on whatever DHCP the bench hands out and
+# applies nothing, so the unit stays reachable while it is verified; the config
+# lands when combiner-go-live removes this marker and reboots. Checked here
+# rather than in the unit file so the /boot fallback above is honoured, and so
+# the reason is visible in combiner-apply.log.
+#
+# --force is the deliberate override: install.sh and an operator debugging by
+# hand both mean it when they pass it. --dry-run is exempt because it changes
+# nothing, and because it is how combiner-go-live validates the config it is
+# about to commit to — while the hold is by definition still in place.
+if [[ -e "$HOLD_MARKER" && "$FORCE" -eq 0 && "$DRY_RUN" -eq 0 ]]; then
+  say "provisioning hold in place ($HOLD_MARKER) — not applying any config"
+  say "this unit is waiting for: sudo combiner-go-live"
+  exit 0
 fi
 
 # The boot partition wins: it is the copy a person can edit with the card in a

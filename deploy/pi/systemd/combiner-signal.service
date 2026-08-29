@@ -1,0 +1,15 @@
+[Unit]
+Description=Signal the combiner's state on the activity LED
+Documentation=https://github.com/misnow1/vunet-dante-combiner-2000/blob/main/docs/sd-image.md
+# Last, so it reports what actually happened rather than what was about to.
+After=combiner-apply.service combiner.service
+After=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Best-effort by design: a unit with no drivable LED still boots normally.
+ExecStart=/usr/local/sbin/combiner-led auto
+
+[Install]
+WantedBy=multi-user.target

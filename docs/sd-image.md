@@ -4,17 +4,26 @@ Prepare a card at the bench, put it in a Pi, and let it provision itself — no
 shell session, no Go toolchain, and (if you stage the tarball) no Internet.
 Running the installer by hand instead: [`setup.md`](setup.md).
 
-**Provisioning needs a network with Internet access.** The first boot refreshes
-the apt index and installs `conntrack` and `overlayroot` (plus `systemd-resolved`
-if the profile configures mgmt DNS) — a few hundred kB, but a working mirror is
-required, along with DHCP and DNS on whatever bench network the unit boots on.
+**Provisioning needs a network with Internet access, and does not care which
+one.** The first boot refreshes the apt index and installs `conntrack` and
+`overlayroot` (plus `systemd-resolved` if the profile configures mgmt DNS) — a
+few hundred kB, but a working mirror is required, along with DHCP and DNS. Any
+LAN that has those will do; it does not have to resemble the show network.
 That is a bench-time requirement only: once provisioned, a unit never needs the
 network again, which is what makes a rack with no Internet workable.
 
-Two facts about the deployment drive the design:
+**A unit boots twice.** The first boot provisions on DHCP and then *holds*: it
+applies nothing, and stays reachable where it is, so it can be verified. The
+config on the card lands when an operator runs `combiner-go-live` on the unit,
+which reboots it onto its own addressing. See [§3](#3-boot-it).
+
+Three facts about the deployment drive the design:
 
 - **A racked Pi has no Internet.** Anything needing a package mirror happens at
   the bench, before the unit goes in.
+- **A configured Pi is unreachable from the bench.** It answers on show VLANs
+  and show addresses. So everything that needs checking has to be checked
+  *before* the config is applied — hence the hold.
 - **A headless appliance is powered off by pulling the rack.** Provisioning logs
   to the card's FAT partition, because the recovery move for a unit that did not
   come up is to read it on a laptop — which cannot mount the ext4 root.
@@ -41,11 +50,20 @@ With the freshly flashed card re-inserted:
   --ssh-key ~/.ssh/id_ed25519.pub
 ```
 
+Stage the **production** config — the one the unit will actually run in the
+rack. There is no separate bench profile to get through the first boot with,
+because the first boot does not apply the config at all.
+
 It finds the mounted boot partition, **validates `my-venue.yaml` with
 `combiner -check` before writing anything**, substitutes your public key into
 the cloud-init template, and stages the release tarballs so the first boot needs
 no network. A bad VLAN id or a misspelled key is caught here, at a desk, rather
 than on a dark unit in a rack.
+
+It also writes an empty **`combiner-provisioning`** marker onto the card. That
+file is the hold: while it exists `combiner-apply` refuses to touch the network,
+and `combiner-go-live` removes it. It is a plain empty file on a FAT partition
+on purpose — you can see the state, and clear it, with the card in a laptop.
 
 | Option | |
 | --- | --- |
@@ -107,6 +125,10 @@ Edit them in an editor that keeps Unix line endings and does not add `.txt`
 (Notepad on Windows 10+ is fine; VS Code or Notepad++ are safer). Leave
 `meta-data` as Imager wrote it.
 
+You do not have to create the `combiner-provisioning` marker by hand:
+`combiner-firstboot.sh` creates it if it is missing, precisely because this path
+has no `prep-card.sh` run behind it. A hand-staged card holds like any other.
+
 To make the first boot work offline, also copy
 `vunet-dante-combiner-<version>-linux-arm64.tar.gz` and `SHA256SUMS` from
 [Releases](https://github.com/misnow1/vunet-dante-combiner-2000/releases) onto
@@ -156,40 +178,106 @@ changes nothing. Without it the first sign of a bad edit is a failed boot.
 
 A common one: `gateway` and `dns` are accepted **only on `mgmt`**, never on
 `control` or `dante`. Dante gear is meant to have no gateway — that is the
-whole reason the combiner SNATs. A Pi that needs its own uplink on a flat lab
-LAN gets it from an untagged `mgmt` VLAN, which is what
+whole reason the combiner SNATs. A Pi that needs its own uplink once it is live
+gets it from an untagged `mgmt` VLAN, which is what
 [`site.lab-flat.example.yaml`](../config/site.lab-flat.example.yaml) is for.
+That profile is a flat-LAN lab config, not a step in provisioning — nothing
+needs it to get a card through its first boot any more.
 
 ## 3. Boot it
 
-Eject, insert, power on, and wait a few minutes. On first boot the Pi:
+Eject, insert, and power on **on any LAN with DHCP and Internet**. It does not
+have to be the show network, and the config on the card is not applied yet.
 
-1. installs the runtime packages while the bench network is still up,
+On the first boot the Pi:
+
+1. installs the runtime packages over the DHCP address it came up with,
 2. verifies and unpacks the release tarball (staged one preferred, else
    downloaded) into `/opt/combiner`,
 3. copies `combiner-site.yaml` to `/etc/combiner/site.yaml`,
-4. runs the normal [`install.sh`](../deploy/pi/install.sh) — the same tested
-   path a manual install uses,
-5. records `/var/lib/combiner/provisioned` so later boots skip all of this.
+4. runs the normal [`install.sh`](../deploy/pi/install.sh) with
+   `--defer-activation` — the same tested path a manual install uses, minus the
+   two steps that would take the unit off this network,
+5. records `/var/lib/combiner/provisioned` so later boots skip all of this,
+6. **holds.** The activity LED settles into a slow steady blink, and the unit
+   stays exactly where it is: same address, same SSH, nothing applied.
 
-Then check it the usual way ([`setup.md`](setup.md) §5): `combiner-status` on
-the box, or `http://<control-ip>:8080/`.
+Provisioning takes a few minutes. What the LED is saying meanwhile:
 
-## Re-homing a unit: bench config, then pave it over
+| Activity LED | Meaning |
+| --- | --- |
+| fast heartbeat | provisioning is running |
+| slow steady blink | provisioned, holding, waiting for you |
+| rapid burst | provisioning failed, or `combiner` is not running |
+| stock card-activity flicker | live and running normally |
 
-Provisioning needs a mirror for apt; a rack does not have one. So provision on a
-bench network, then replace the config before the unit is racked:
+## 4. Verify it, then go live
 
-1. Stage a card with a **bench** config — an untagged `mgmt` VLAN on a LAN with
-   DHCP, a gateway and DNS, such as
-   [`site.lab-flat.example.yaml`](../config/site.lab-flat.example.yaml). Boot it
-   at the shop, let apt run, and verify the unit on your own network.
-2. When it is ready to rack, overwrite `combiner-site.yaml` on the boot
-   partition with the **production** config — re-run `prep-card.sh` with the
-   card in a laptop, or edit it over SSH while the unit is still on the bench.
-3. Rack it and power on. `combiner-apply` notices the config differs from what
-   is live and paves the new one over the old — no Internet, no console, no
-   keyboard.
+The unit is reachable right now and will not be afterwards, so this is the only
+convenient moment to check anything. SSH in — the login prints a reminder of
+which state it is in — and look:
+
+```bash
+sudo combiner-go-live --status     # held or live, and what it will become
+sudo combiner-apply --dry-run      # runs the real generators and nft -c
+```
+
+`--dry-run` is the useful one: it renders the ruleset and the networkd units
+from the card's config and validates them, changing nothing. When you are
+satisfied:
+
+```bash
+sudo combiner-go-live
+```
+
+It re-runs that validation, tells you what the unit is about to become, and asks
+once. Then it hands the interfaces from NetworkManager to `systemd-networkd`,
+enables the runtime units, clears the hold, and reboots. On the way up
+`combiner-apply` paves in the card's config, and the unit answers on its
+production addressing — not on the network you were just talking to it over.
+
+Check it the usual way ([`setup.md`](setup.md) §5): `combiner-status` on the
+box, or `http://<control-ip>:8080/`.
+
+If a config would be rejected, `combiner-go-live` refuses and changes nothing.
+The unit stays on the bench network, which is the entire reason the hold exists.
+
+### Putting a live unit back on a bench
+
+```bash
+sudo combiner-go-live --undo
+```
+
+It hands the interfaces back to NetworkManager, removes the combiner networkd
+units, disables `nftables`, `combiner` and `combiner-apply`, turns forwarding
+off, re-creates the hold, and reboots onto DHCP. The config stays on the card,
+so `combiner-go-live` puts it back.
+
+**Creating the marker by hand is not enough on a unit that has already gone
+live.** The hold stops `combiner-apply` from applying a config; it does not
+unpick one that is already applied. The networkd units, ruleset and hostname
+would all still be in `/etc` and NetworkManager would still be disabled, so the
+unit would come back on show addressing — held, and just as unreachable. On a
+card that has never booted, an empty `combiner-provisioning` file is all it
+takes.
+
+## Re-homing a unit for a different venue
+
+Locking, sealing and the hold all leave this unchanged: **the card is the source
+of truth**, and `combiner-apply` re-reads it on every boot.
+
+1. Pull the card, overwrite `combiner-site.yaml` with the new config, reseat it.
+   `prep-card.sh --check-card` validates the edit before you boot it.
+2. Power on. `combiner-apply` notices the config differs from what is live and
+   paves the new one over the old — no Internet, no console, no keyboard.
+
+Editing it over SSH on the unit works too, if you can still reach it.
+
+Note that re-running the full `prep-card.sh` (rather than editing the file in
+place) re-stages the card completely, which includes re-arming the hold — so
+that unit provisions again and waits for another `combiner-go-live`. That is
+usually what you want when a card changes hands; use a plain file edit when it
+is not.
 
 ### Re-staging really does re-provision
 
@@ -199,6 +287,10 @@ places: `meta-data` on the seed, and `ds=nocloud;i=<id>` on the **kernel command
 line**, where it takes precedence. `prep-card.sh` rewrites both, so re-staging a
 card genuinely means "provision this again". Changing only `meta-data` is
 silently ineffective — the card looks freshly staged and provisions nothing.
+
+Re-staging also re-writes the `combiner-provisioning` marker, so a re-staged
+card holds on its next boot even if that unit had already gone live once. A card
+that has been re-staged has, by definition, not been verified since.
 
 `combiner-apply` runs on every boot from `combiner-apply.service` and compares
 the config it would generate against what is actually live. When they match it
@@ -221,16 +313,24 @@ on show addressing and unreachable from a bench LAN.
 
 ## When it does not come up
 
-Pull the card, put it in a laptop, and open **`combiner-firstboot.log`** on the
-boot partition. Every step is logged there, and a failure prints a
-`PROVISIONING FAILED` banner naming the cause. Re-staging the card moves that
-log aside to `combiner-firstboot.log.prev` rather than deleting it, so the boot
-you are debugging survives a re-stage.
+**Try SSH first.** A unit whose provisioning failed never left the network it
+booted on — the hold is written onto the card at staging time, before anything
+can go wrong — so it should still answer at its DHCP address, with the failure
+in `journalctl` and the LED in a rapid burst. That is usually quicker than
+pulling the card, and it is the main thing the two-phase boot buys you.
+
+Failing that: pull the card, put it in a laptop, and open
+**`combiner-firstboot.log`** on the boot partition. Every step is logged there,
+and a failure prints a `PROVISIONING FAILED` banner naming the cause.
+Re-staging the card moves that log aside to `combiner-firstboot.log.prev`
+rather than deleting it, so the boot you are debugging survives a re-stage.
+`combiner-golive.log` and `combiner-apply.log` are next to it and cover the two
+later steps.
 
 A failed provision leaves IP forwarding **off**. That is the safe state: the
 unit will not bridge Control and Dante until the problem is fixed. Re-staging
-the card and rebooting is the normal fix; the marker file lives on the root
-filesystem, so a re-flashed card always re-provisions.
+the card and rebooting is the normal fix; the `provisioned` marker lives on the
+root filesystem, so a re-flashed card always re-provisions.
 
 ## Why there is no downloadable `.img`
 
@@ -297,6 +397,9 @@ It refuses to lock, and retries on the next boot, when:
 
 - machine-id is still empty or there are no host keys — the clone has not
   finished becoming itself
+- the unit is still holding — it has never applied a config at all, and a held
+  unit's `combiner-apply` succeeds *by doing nothing*, so this has to be checked
+  separately from the one below
 - `combiner-apply` has not succeeded — freezing a misconfigured unit only makes
   it harder to fix
 - `overlayroot` is not installed — it ships as a provisioning dependency
@@ -349,7 +452,7 @@ The only thing locking prevents is a change made *inside* the running system
 persisting: edit `/etc/combiner/site.yaml` directly and the next boot puts it
 back from the card. That is deliberate — the card is the source of truth.
 
-## Updating a racked unit## Updating a racked unit
+## Updating a racked unit
 
 With a read-only root and no uplink, the honest answer is usually **swap the
 card** — cards are cheap, the config lives on the card's FAT partition, and a

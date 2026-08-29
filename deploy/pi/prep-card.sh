@@ -5,12 +5,21 @@
 # against the mounted boot partition. It validates the site config BEFORE the
 # card is touched, so a typo is caught at the bench instead of on a dark unit in
 # a rack. Windows users copy the same files by hand — see docs/sd-image.md.
+#
+# Stage the PRODUCTION config, not a bench one. The card also carries a
+# provisioning hold, so the first boot runs on whatever DHCP it finds, installs
+# everything, and then waits: nothing on the card is applied until an operator
+# runs combiner-go-live on the unit.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CLOUD_INIT="$ROOT/deploy/pi/cloud-init"
 VERSION_DEFAULT="0.2.2"
 REPO="misnow1/vunet-dante-combiner-2000"
+
+# Must match HOLD_MARKER in combiner-firstboot.sh, combiner-apply.sh and
+# combiner-go-live.sh.
+HOLD_MARKER_NAME="combiner-provisioning"
 
 CARD=""
 SITE=""
@@ -146,6 +155,13 @@ if [[ "$CHECK_CARD" -eq 1 ]]; then
   if validate_site_config "$CARD_SITE"; then
     echo ""
     echo "OK: $CARD_SITE would be accepted by install.sh"
+    if [[ -e "$CARD/$HOLD_MARKER_NAME" ]]; then
+      echo "This card holds on first boot: it provisions on DHCP and waits for"
+      echo "combiner-go-live before applying the config above."
+    else
+      echo "warning: no $HOLD_MARKER_NAME on this card — it will apply the config" >&2
+      echo "         above on its first boot, on whatever network it boots on" >&2
+    fi
     exit 0
   fi
   die "the config on the card would be REJECTED on first boot — fix it before booting"
@@ -332,6 +348,16 @@ install -m 0644 "$STAGED_USER_DATA" "$CARD/user-data"
 install -m 0644 "$SITE"             "$CARD/combiner-site.yaml"
 install -m 0644 "$CLOUD_INIT/combiner-firstboot.sh" "$CARD/combiner-firstboot.sh"
 
+# The provisioning hold. Written at STAGING time, not by the unit, so a card
+# holds from the moment it is prepared — including one whose provisioning
+# fails, and one that is re-staged after having already gone live once.
+# combiner-apply refuses to touch the network while this exists;
+# combiner-go-live removes it. It is a plain empty file on a FAT partition on
+# purpose: an operator with the card in a laptop can see the state, and clear
+# it, without anything installed.
+: >"$CARD/$HOLD_MARKER_NAME"
+chmod 644 "$CARD/$HOLD_MARKER_NAME"
+
 # cloud-init runs per-instance modules — users, runcmd, everything that
 # provisions this box — exactly ONCE per instance-id, and Imager's meta-data
 # pins a fixed one. Re-staging a card that has already booted would then be
@@ -424,11 +450,20 @@ cat <<EOF
 
 Card ready.
 
-  $CARD/user-data          (login: ${LOGIN_USER:-combiner})
+  $CARD/user-data                 (login: ${LOGIN_USER:-combiner})
   $CARD/combiner-site.yaml
   $CARD/combiner-firstboot.sh
+  $CARD/$HOLD_MARKER_NAME    (holds until combiner-go-live)
 
-Eject the card, boot the Pi with a network it can reach, and wait for the first
-boot to finish. Then check $(basename "$CARD")/combiner-firstboot.log on the card, or run
-'combiner-status' on the box.
+Eject the card and boot the Pi on any LAN with DHCP and Internet — it does not
+have to be the show network, and the config above is not applied yet.
+
+First boot installs everything and then holds, still on DHCP. The activity LED
+settles into a slow steady blink when it is ready. Then, on the unit:
+
+  sudo combiner-go-live --status    what it will become
+  sudo combiner-go-live             apply it and reboot into it
+
+After that it answers on its production addressing only. If it does not come
+up, read $(basename "$CARD")/combiner-firstboot.log on the card.
 EOF

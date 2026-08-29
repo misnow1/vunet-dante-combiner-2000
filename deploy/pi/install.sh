@@ -7,10 +7,14 @@ usage() {
   cat <<'USAGE'
 usage: install.sh [SITE_YAML] [--i-have-console] [--offline-debs DIR]
 
-  SITE_YAML           path to site.yaml (default /etc/combiner/site.yaml)
-  --i-have-console    proceed over SSH, accepting that this may lock you out
-  --offline-debs DIR  install runtime packages from .deb files in DIR instead
-                      of apt (for racked units with no Internet)
+  SITE_YAML            path to site.yaml (default /etc/combiner/site.yaml)
+  --i-have-console     proceed over SSH, accepting that this may lock you out
+  --offline-debs DIR   install runtime packages from .deb files in DIR instead
+                       of apt (for racked units with no Internet)
+  --defer-activation   do the OS preparation but do NOT apply the site config or
+                       touch the network managers. The unit stays on whatever
+                       DHCP it booted with until combiner-go-live is run. This
+                       is what first-boot provisioning uses.
 USAGE
 }
 
@@ -18,10 +22,12 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SITE_YAML=""
 I_HAVE_CONSOLE=0
 OFFLINE_DEBS=""
+DEFER_ACTIVATION=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --i-have-console) I_HAVE_CONSOLE=1; shift ;;
+    --defer-activation) DEFER_ACTIVATION=1; shift ;;
     --offline-debs)
       [[ -n "${2:-}" ]] || { echo "--offline-debs needs a directory" >&2; exit 1; }
       OFFLINE_DEBS="$2"; shift 2 ;;
@@ -57,10 +63,14 @@ if [[ ! -f "$SITE_YAML" ]]; then
 fi
 
 # SSH over a non-Mgmt path will die when NetworkManager/dhcpcd are torn down.
-if [[ -n "${SSH_CONNECTION:-}" && "$I_HAVE_CONSOLE" -ne 1 ]]; then
+# --defer-activation does neither, which is the entire point of it: the unit
+# stays exactly as reachable after this run as it was before, and the teardown
+# waits for combiner-go-live. So the guard does not apply.
+if [[ -n "${SSH_CONNECTION:-}" && "$I_HAVE_CONSOLE" -ne 1 && "$DEFER_ACTIVATION" -ne 1 ]]; then
   echo "refusing install over SSH without --i-have-console" >&2
   echo "this script disables existing network managers and may lock you out" >&2
   echo "run from a serial/HDMI console, or re-run with --i-have-console" >&2
+  echo "or --defer-activation, which leaves the current network alone" >&2
   exit 1
 fi
 
@@ -265,18 +275,24 @@ if [[ -e /usr/lib/systemd/system/systemd-resolved.service ]]; then
   systemctl enable --now systemd-resolved || true
 fi
 
-systemctl enable systemd-networkd
-systemctl disable --now NetworkManager 2>/dev/null || true
-systemctl disable --now dhcpcd 2>/dev/null || true
+# The network swap is the moment this box stops being reachable where it is and
+# starts being reachable where its config says. Under --defer-activation that
+# moment belongs to combiner-go-live, not here: first boot needs the DHCP it
+# came up on to reach a mirror, and an operator needs it to verify the unit.
+if [[ "$DEFER_ACTIVATION" -eq 0 ]]; then
+  systemctl enable systemd-networkd
+  systemctl disable --now NetworkManager 2>/dev/null || true
+  systemctl disable --now dhcpcd 2>/dev/null || true
 
-# A surviving network manager silently fights networkd and VLANs never appear.
-for svc in NetworkManager dhcpcd; do
-  if systemctl is-active --quiet "$svc" 2>/dev/null; then
-    echo "$svc is still active and will fight systemd-networkd — aborting" >&2
-    echo "stop it manually (systemctl disable --now $svc) and re-run" >&2
-    exit 1
-  fi
-done
+  # A surviving network manager silently fights networkd and VLANs never appear.
+  for svc in NetworkManager dhcpcd; do
+    if systemctl is-active --quiet "$svc" 2>/dev/null; then
+      echo "$svc is still active and will fight systemd-networkd — aborting" >&2
+      echo "stop it manually (systemctl disable --now $svc) and re-run" >&2
+      exit 1
+    fi
+  done
+fi
 
 # Install the runtime pieces. The generators go to a stable path so
 # combiner-apply works at boot without the unpacked release tree still being
@@ -291,6 +307,11 @@ install -m 0755 "$ROOT/deploy/pi/combiner-seal.sh" /usr/local/sbin/combiner-seal
 # be gone.
 install -m 0755 "$ROOT/deploy/pi/combiner-finalize.sh" /usr/local/sbin/combiner-finalize
 install -m 0755 "$ROOT/deploy/pi/combiner-lock.sh" /usr/local/sbin/combiner-lock
+# combiner-go-live is what releases a deferred install, so it has to be present
+# on every unit — including one installed by hand, which may still be put into
+# the hold later by re-staging its card.
+install -m 0755 "$ROOT/deploy/pi/combiner-go-live.sh" /usr/local/sbin/combiner-go-live
+install -m 0755 "$ROOT/deploy/pi/combiner-led.sh" /usr/local/sbin/combiner-led
 install -m 0644 "$ROOT/deploy/pi/systemd/combiner-finalize.service" \
   /etc/systemd/system/combiner-finalize.service
 install -d /usr/local/lib/combiner
@@ -300,26 +321,37 @@ install -m 0644 "$ROOT/deploy/pi/generate-nftables.py" \
                 /usr/local/lib/combiner/
 install -m 0644 "$ROOT/deploy/pi/systemd/combiner.service" /etc/systemd/system/combiner.service
 install -m 0644 "$ROOT/deploy/pi/systemd/combiner-apply.service" /etc/systemd/system/combiner-apply.service
+install -m 0644 "$ROOT/deploy/pi/systemd/combiner-signal.service" /etc/systemd/system/combiner-signal.service
 
 systemctl daemon-reload
 # Re-running the generators can orphan units the old swap mechanism created.
 systemctl reset-failed rpi-zram-writeback.timer 2>/dev/null || true
-systemctl enable nftables combiner combiner-apply
+# Always: the LED is a status signal, and a held unit needs it most.
+systemctl enable combiner-signal >/dev/null 2>&1 || true
 
-# Everything config-derived now lives in combiner-apply, so a first install and
-# a later re-home run exactly the same code path. --force because an install
-# must apply even when the config happens to match what is already live.
-/usr/local/sbin/combiner-apply \
-  --config "$SITE_YAML" \
-  --allowlists "$ROOT/config/allowlists" \
-  --force
+if [[ "$DEFER_ACTIVATION" -eq 0 ]]; then
+  systemctl enable nftables combiner combiner-apply
 
-# Type=simple means restart returns 0 even if combiner exits immediately.
-sleep 3
-if ! systemctl is-active --quiet combiner; then
-  echo "combiner failed to stay running:" >&2
-  journalctl -u combiner -b --no-pager -n 40 >&2 || true
-  exit 1
+  # Everything config-derived now lives in combiner-apply, so a first install
+  # and a later re-home run exactly the same code path. --force because an
+  # install must apply even when the config happens to match what is live.
+  /usr/local/sbin/combiner-apply \
+    --config "$SITE_YAML" \
+    --allowlists "$ROOT/config/allowlists" \
+    --force
+
+  # Type=simple means restart returns 0 even if combiner exits immediately.
+  sleep 3
+  if ! systemctl is-active --quiet combiner; then
+    echo "combiner failed to stay running:" >&2
+    journalctl -u combiner -b --no-pager -n 40 >&2 || true
+    exit 1
+  fi
+else
+  # The allowlists live in the release tree, which may be gone by the time
+  # combiner-go-live runs. Stage them now so the deferred apply has them.
+  install -d /etc/combiner/allowlists
+  cp -a "$ROOT/config/allowlists/." /etc/combiner/allowlists/
 fi
 
 # A dangling /etc/resolv.conf stub symlink breaks name resolution for the whole
@@ -330,9 +362,21 @@ if [[ -e /usr/lib/systemd/system/systemd-resolved.service ]] && ! systemctl is-a
   echo "  fix with: systemctl enable --now systemd-resolved" >&2
 fi
 
-echo "Install complete. Run: combiner-status"
-if [[ "$DHCP_ENABLED" == "1" ]]; then
-  echo "Status: http://<control-ip>:8080/  (clients on Control; use combiner Control IP)"
+if [[ "$DEFER_ACTIVATION" -eq 1 ]]; then
+  cat <<'EOF'
+Install complete, and NOT applied. This unit is still on the network it booted
+with, and its site config has not been touched.
+
+Verify it, then commit:
+
+    sudo combiner-go-live --status     what it will become
+    sudo combiner-go-live              apply it and reboot into it
+EOF
 else
-  echo "Status: http://<control-ip-or-mgmt-ip>:8080/"
+  echo "Install complete. Run: combiner-status"
+  if [[ "$DHCP_ENABLED" == "1" ]]; then
+    echo "Status: http://<control-ip>:8080/  (clients on Control; use combiner Control IP)"
+  else
+    echo "Status: http://<control-ip-or-mgmt-ip>:8080/"
+  fi
 fi

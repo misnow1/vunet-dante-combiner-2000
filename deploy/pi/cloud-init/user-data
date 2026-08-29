@@ -11,9 +11,12 @@
 # On macOS/Linux, deploy/pi/prep-card.sh does all of that and validates the
 # config first. Full instructions: docs/sd-image.md
 #
-# The first boot needs Internet UNLESS you also stage a release tarball on the
-# boot partition (prep-card.sh does by default). After that the unit never
-# needs a network again.
+# The first boot needs Internet: it refreshes the apt index and installs the
+# packages below. Staging a release tarball (prep-card.sh does by default) saves
+# the download of the combiner itself, not the apt run. Any LAN with DHCP, DNS
+# and a mirror will do — the site config is NOT applied on this boot, so the
+# unit stays reachable where it booted until combiner-go-live is run. After that
+# it never needs a network again.
 
 # ============================ EDIT THIS BLOCK ============================
 # Replacing Imager's user-data also replaces the login it configured, so the
@@ -62,6 +65,10 @@ packages:
   - python3-yaml
   - iproute2
   - conntrack
+  # Every unit locks its root eventually (combiner-lock / combiner-seal), and
+  # that step must work in a rack with no network. Install it here, where the
+  # bench network is, rather than at lock time. Pulls cryptsetup with it.
+  - overlayroot
 
 runcmd:
   # FIRST, and never allowed to fail the boot. Two separate things go wrong
@@ -78,4 +85,4 @@ runcmd:
   - [sh, -c, "/usr/bin/ssh-keygen -A 2>/dev/null || true; systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null || true"]
   - [bash, /boot/firmware/combiner-firstboot.sh]
 
-final_message: "combiner first boot finished after $UPTIME seconds — see combiner-firstboot.log on the boot partition"
+final_message: "combiner provisioning finished after $UPTIME seconds — this unit is HOLDING on its current network. Run 'sudo combiner-go-live' to apply its config. Log: combiner-firstboot.log on the boot partition"

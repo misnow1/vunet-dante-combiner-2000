@@ -35,6 +35,42 @@ forwarding — lives in `combiner-apply`, which also runs on every boot from
 the same code, and a unit whose card gets a new config paves it over on the next
 power cycle. See [`docs/sd-image.md`](../../docs/sd-image.md).
 
+### Deferred activation
+
+`--defer-activation` stops short of the two steps that take the box off the
+network it is currently on: the NetworkManager → `systemd-networkd` handover,
+and enabling + running `combiner-apply`. Everything else runs normally.
+
+That is what card provisioning uses. Provisioning needs a mirror, DHCP and DNS;
+a rack has none of those, so the first boot happens on a bench LAN — and a unit
+that applied show addressing at the end of that boot would vanish before anyone
+could check it. Instead it **holds**: `prep-card.sh` writes an empty
+`combiner-provisioning` marker onto the card's boot partition, `combiner-apply`
+refuses to touch the network while it exists, and `combiner-go-live` removes it
+and reboots.
+
+| | |
+| --- | --- |
+| `combiner-go-live` | validate the card's config, hand over the interfaces, enable the units, clear the hold, reboot. `--undo` reverses all of that and comes back on DHCP. `--status` reports held vs live and needs no root |
+| `combiner-led` | drive the activity LED (`provisioning` / `ready` / `failed` / `running` / `auto`). Best-effort: a host with no LED is a silent success |
+| `combiner-signal.service` | runs `combiner-led auto` late in every boot, so the LED reports the state the unit actually reached |
+
+`combiner-seal` is happy to seal a **held** unit — that is the normal golden
+card. It strips `/etc/combiner/site.yaml` anyway, since each clone brings its
+own, so the golden unit never had to apply one; requiring go-live first would
+mean putting a production config onto a bench that cannot satisfy those VLANs.
+
+It does have to *take the unit live* first, though, and it runs
+`combiner-go-live --yes --no-reboot` to do it. A held unit was installed with
+`--defer-activation`, so `nftables`, `combiner` and `combiner-apply` are
+installed and not enabled; an image made from it would clone a fleet that boots,
+applies nothing, and looks fine. Going live enables them and clears the marker,
+so each clone paves in its own config on its first boot.
+
+`combiner-finalize` does refuse to lock a held unit: a held unit's
+`combiner-apply` succeeds *by doing nothing*, so "is it configured" has to be
+asked separately from "did apply succeed".
+
 ## Prerequisites
 
 - Raspberry Pi with GbE (Pi 4/5 recommended; Pi 3 OK for early lab)
@@ -116,10 +152,14 @@ sudo ./deploy/pi/install.sh /etc/combiner/site.yaml --i-have-console
 ```text
 usage: install.sh [SITE_YAML] [--i-have-console] [--offline-debs DIR]
 
-  SITE_YAML           path to site.yaml (default /etc/combiner/site.yaml)
-  --i-have-console    proceed over SSH, accepting that this may lock you out
-  --offline-debs DIR  install runtime packages from .deb files in DIR instead
-                      of apt (for racked units with no Internet)
+  SITE_YAML            path to site.yaml (default /etc/combiner/site.yaml)
+  --i-have-console     proceed over SSH, accepting that this may lock you out
+  --offline-debs DIR   install runtime packages from .deb files in DIR instead
+                       of apt (for racked units with no Internet)
+  --defer-activation   do the OS preparation but do NOT apply the site config or
+                       touch the network managers. The unit stays on whatever
+                       DHCP it booted with until combiner-go-live is run. This
+                       is what first-boot provisioning uses.
 ```
 
 `install.sh` uses the prebuilt `bin/` binaries and does not require Go.
@@ -136,6 +176,8 @@ sudo ./deploy/pi/install.sh /etc/combiner/site.yaml --i-have-console
 ```
 
 Without `--i-have-console`, the script refuses to run over SSH (it would lock you out).
+`--defer-activation` also satisfies that guard, because it changes nothing about
+the current network — the handover waits for `combiner-go-live`.
 
 ### What the installer does (order matters)
 
@@ -150,6 +192,9 @@ Without `--i-have-console`, the script refuses to run over SSH (it would lock yo
 9. Confirms `combiner` is still active a few seconds after start
 
 Avahi is disabled/masked so it does not fight the reflector on UDP 5353. The install aborts if `NetworkManager` or `dhcpcd` survive the disable step, since either one silently prevents `systemd-networkd` from creating VLANs.
+
+Steps 3–9 are what `--defer-activation` skips; `combiner-go-live` runs them on
+the next boot instead, by way of `combiner-apply.service`.
 
 ## Troubleshooting
 

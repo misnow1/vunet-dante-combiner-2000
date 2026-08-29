@@ -8,7 +8,13 @@ After=cloud-final.service cloud-init.target
 # Never race a provisioning run: rebooting mid-provision would be worse than
 # leaving the root writable for one more boot.
 After=multi-user.target
-ConditionPathExists=/boot/firmware/cmdline.txt
+# Both paths: the script falls back to /boot on images that predate
+# /boot/firmware, and a condition naming only the new path would skip the unit
+# on exactly those. The "|" prefix makes each a TRIGGERING condition, which
+# systemd ORs; without it repeated conditions are ANDed and no unit would ever
+# satisfy both.
+ConditionPathExists=|/boot/firmware/cmdline.txt
+ConditionPathExists=|/boot/cmdline.txt
 
 [Service]
 Type=oneshot

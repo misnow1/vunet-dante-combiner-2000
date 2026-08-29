@@ -12,6 +12,11 @@
 # record that provisioning already happened. A clone must not try to
 # re-provision — that would need the Internet it does not have.
 #
+# A golden unit is normally still HOLDING (see combiner-go-live): it provisioned
+# on a bench and never applied a config, because it has no rack to apply one
+# for. That is fine, and seal takes it live before imaging so the clones do not
+# inherit a hold nobody can release.
+#
 # What it CLEARS is everything that must not be shared by a fleet: machine-id
 # (systemd-networkd derives its DHCP DUID from it, so clones would collide on
 # leases), SSH host keys (otherwise one compromised card is every unit), the
@@ -20,6 +25,7 @@ set -euo pipefail
 
 BOOT_DIR="/boot/firmware"
 [[ -d "$BOOT_DIR" ]] || BOOT_DIR="/boot"
+HOLD_MARKER="$BOOT_DIR/combiner-provisioning"
 
 ASSUME_YES=0
 DRY_RUN=0
@@ -74,6 +80,29 @@ Release it first, then seal:
     sudo combiner-seal"
 fi
 
+# A HELD golden unit is not just acceptable here, it is the normal case. Seal
+# strips /etc/combiner/site.yaml anyway — each clone brings its own — so the
+# golden unit never needed to apply one. Insisting it go live first would mean
+# putting a production config onto a bench that cannot satisfy those VLANs,
+# leaving the very unit about to be imaged unreachable and failing.
+#
+# But a held unit was installed with --defer-activation, which means the
+# runtime units are installed and NOT enabled: systemd-networkd, nftables,
+# combiner and combiner-apply are all still waiting for a go-live that a clone
+# in a rack will never get. Imaging that produces a fleet that boots, holds
+# nothing, applies nothing, and looks fine. So the activation has to happen
+# here — delegated to combiner-go-live rather than duplicated, so there is one
+# definition of what "live" means.
+WAS_HELD=0
+if [[ -e "$HOLD_MARKER" ]]; then
+  WAS_HELD=1
+  [[ -x /usr/local/sbin/combiner-go-live ]] ||
+    die "this unit is holding but combiner-go-live is not installed — re-run
+install.sh from a release tree, or clear the hold by hand before sealing:
+
+    sudo rm $HOLD_MARKER"
+fi
+
 if [[ "$DRY_RUN" -eq 0 && "$ASSUME_YES" -eq 0 ]]; then
   [[ -t 0 ]] || die "not a terminal — pass --yes to proceed non-interactively"
   echo "This clears this unit's identity: machine-id, SSH host keys, random"
@@ -95,6 +124,21 @@ do_step() {
 }
 
 say "sealing (boot partition: $BOOT_DIR)"
+
+# Before anything is cleared: go-live validates against /etc/combiner/site.yaml,
+# which the clearing steps below remove. --no-reboot because this unit is about
+# to be powered off and imaged, not run.
+if [[ "$WAS_HELD" -eq 1 ]]; then
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "  would: combiner-go-live --yes --no-reboot (arm the clones to go live)"
+  else
+    echo "  combiner-go-live --yes --no-reboot (clones go live on their first boot)"
+    /usr/local/sbin/combiner-go-live --yes --no-reboot ||
+      die "combiner-go-live failed — nothing has been cleared. A clone of this
+card would never apply its config, so sealing it now would produce a fleet that
+boots and does nothing."
+  fi
+fi
 
 # --- identity ---------------------------------------------------------------
 # Truncate rather than delete: an EMPTY /etc/machine-id is systemd's documented
@@ -138,7 +182,12 @@ do_step "truncate /var/log files" \
   bash -c 'find /var/log -type f -exec truncate -s 0 {} + 2>/dev/null || true'
 
 do_step "remove this unit's boot-partition logs" \
-  bash -c "rm -f '$BOOT_DIR'/combiner-firstboot.log '$BOOT_DIR'/combiner-firstboot.log.prev '$BOOT_DIR'/combiner-apply.log"
+  bash -c "rm -f '$BOOT_DIR'/combiner-firstboot.log '$BOOT_DIR'/combiner-firstboot.log.prev '$BOOT_DIR'/combiner-apply.log '$BOOT_DIR'/combiner-golive.log"
+
+# Belt and braces: combiner-go-live above already removed it on a held unit, and
+# a unit that was already live never had one. An image that still carried it
+# would produce a fleet waiting for a go-live nobody can run.
+do_step "ensure no provisioning hold is imaged" rm -f "$HOLD_MARKER"
 
 do_step "clear shell histories and known_hosts" \
   bash -c 'rm -f /root/.bash_history /home/*/.bash_history /root/.ssh/known_hosts /home/*/.ssh/known_hosts 2>/dev/null || true'
@@ -212,12 +261,12 @@ fi
 # overlayroot is installed HERE, where there is a bench network, so the locking
 # step itself needs none.
 arm_overlay() {
-  if ! dpkg -s overlayroot >/dev/null 2>&1; then
-    say "installing overlayroot (needs the bench network; the lock step will not)"
-    if ! DEBIAN_FRONTEND=noninteractive apt-get install -y overlayroot; then
-      die "could not install overlayroot — re-run with a network, or --no-overlay"
-    fi
-  fi
+  # overlayroot ships as a provisioning dependency (see user-data), so there is
+  # no apt call here — sealing works on a unit with no network.
+  dpkg -s overlayroot >/dev/null 2>&1 ||
+    die "overlayroot is not installed. It ships as a provisioning dependency, so
+this unit predates that change. Install it (apt-get install overlayroot) and
+re-run, or pass --no-overlay to seal without arming the read-only root."
   # install.sh ships both; seal only decides whether they are armed.
   [[ -x /usr/local/sbin/combiner-finalize ]] ||
     die "combiner-finalize is not installed — re-run install.sh from a release tree"
@@ -259,6 +308,18 @@ Next:
 Each clone regenerates its own machine-id and SSH host keys on first boot, and
 combiner-apply paves in whichever config its card carries.
 EOF
+
+if [[ "$WAS_HELD" -eq 1 ]]; then
+  cat <<'EOF'
+This unit was still holding, which is normal for a golden card — it never had to
+apply a config of its own. It has been taken live (units enabled, interfaces
+handed to systemd-networkd) and the hold cleared, so the clones apply their
+config on their first boot rather than waiting for a combiner-go-live nobody can
+run in a rack. Validate each card's config before you boot it:
+
+    prep-card.sh --check-card
+EOF
+fi
 
 if [[ "$POWEROFF" -eq 1 ]]; then
   say "powering off"

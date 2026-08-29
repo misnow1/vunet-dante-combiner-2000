@@ -23,7 +23,14 @@ PREP_CARD = REPO_ROOT / "deploy" / "pi" / "prep-card.sh"
 APPLY = REPO_ROOT / "deploy" / "pi" / "combiner-apply.sh"
 SEAL = REPO_ROOT / "deploy" / "pi" / "combiner-seal.sh"
 INSTALL = REPO_ROOT / "deploy" / "pi" / "install.sh"
+GO_LIVE = REPO_ROOT / "deploy" / "pi" / "combiner-go-live.sh"
+LED = REPO_ROOT / "deploy" / "pi" / "combiner-led.sh"
 SYSTEMD = REPO_ROOT / "deploy" / "pi" / "systemd"
+
+# The provisioning hold. Six files have to agree on this name, and nothing at
+# runtime would notice if one of them drifted: a unit whose marker is spelled
+# differently simply applies show addressing on a bench LAN and vanishes.
+HOLD_MARKER_NAME = "combiner-provisioning"
 
 # prep-card.sh substitutes this; renaming it in one file and not the other would
 # silently ship cards that nothing can log into.
@@ -88,7 +95,7 @@ def test_site_config_filename_agrees_between_script_and_prep_card() -> None:
     assert "combiner-site.yaml" in PREP_CARD.read_text()
 
 
-@pytest.mark.parametrize("script", [FIRSTBOOT, PREP_CARD, APPLY, INSTALL, SEAL])
+@pytest.mark.parametrize("script", [FIRSTBOOT, PREP_CARD, APPLY, INSTALL, SEAL, GO_LIVE, LED])
 def test_shell_scripts_parse(script: Path) -> None:
     assert script.stat().st_mode & 0o111, f"{script.name} is not executable"
     subprocess.run(["bash", "-n", str(script)], check=True)
@@ -513,8 +520,9 @@ def test_finalize_keeps_cmdline_single_line() -> None:
 def test_seal_arms_the_overlay_rather_than_enabling_it() -> None:
     text = SEAL.read_text()
     assert "combiner-finalize" in text
-    # overlayroot must be installed at bench time so locking needs no network.
-    assert "apt-get install -y overlayroot" in text
+    # overlayroot arrives during provisioning, not here: sealing may run on a
+    # unit with no network. Seal only checks for it.
+    assert "dpkg -s overlayroot" in text
     assert "--no-overlay" in text
 
 
@@ -601,3 +609,310 @@ def test_seal_refuses_a_locked_root() -> None:
     guard = text.index("overlayroot=tmpfs' /proc/cmdline")
     first_write = text.index("truncate -s 0 /etc/machine-id")
     assert guard < first_write, "the guard must precede the first write"
+
+
+def test_overlayroot_is_a_provisioning_dependency(user_data: dict[str, Any]) -> None:
+    """Every unit locks its root eventually, and that step may run in a rack with
+    no network. Installing overlayroot at lock time made locking need a mirror;
+    it belongs in provisioning, where the bench network is."""
+    assert "overlayroot" in set(user_data["packages"])
+
+
+@pytest.mark.parametrize("script", [LOCK, SEAL], ids=["combiner-lock", "combiner-seal"])
+def test_lock_and_seal_never_invoke_apt(script: Path) -> None:
+    """They may run on a unit already racked."""
+    invocations = [ln for ln in script.read_text().splitlines() if re.match(r"\s*(\w+=\S+\s+)*apt-get\b", ln)]
+    assert not invocations, invocations
+
+
+# --------------------------------------------------------------------------
+# Two-phase provisioning: first boot holds on DHCP, combiner-go-live commits.
+# --------------------------------------------------------------------------
+
+HOLD_USERS = [
+    (PREP_CARD, "prep-card"),
+    (FIRSTBOOT, "combiner-firstboot"),
+    (APPLY, "combiner-apply"),
+    (GO_LIVE, "combiner-go-live"),
+    (LED, "combiner-led"),
+    (SEAL, "combiner-seal"),
+    (FINALIZE, "combiner-finalize"),
+]
+
+
+@pytest.mark.parametrize("script,name", HOLD_USERS, ids=[n for _, n in HOLD_USERS])
+def test_the_hold_marker_name_agrees_everywhere(script: Path, name: str) -> None:
+    """A drifted name fails silently and expensively: the unit skips the hold,
+    applies show addressing on a bench LAN, and is gone."""
+    assert HOLD_MARKER_NAME in script.read_text()
+
+
+def test_prep_card_writes_the_provisioning_hold(tmp_path: Path) -> None:
+    """Written at staging time, not by the unit, so a card holds from the moment
+    it is prepared — including one whose provisioning fails outright."""
+    r = _prep_card(tmp_path, "--password-hash", GOOD_HASH)
+    assert r.returncode == 0, r.stderr
+    assert (tmp_path / "card" / HOLD_MARKER_NAME).exists()
+
+
+def test_restaging_a_live_card_puts_it_back_into_the_hold(tmp_path: Path) -> None:
+    """Re-staging means 'provision this again', and that has to include the hold
+    — otherwise a card pulled from a running unit and re-staged would go straight
+    back to show addressing without anyone verifying it."""
+    for _ in range(2):
+        r = _prep_card(tmp_path, "--password-hash", GOOD_HASH)
+        assert r.returncode == 0, r.stderr
+    assert (tmp_path / "card" / HOLD_MARKER_NAME).exists()
+
+
+def test_firstboot_defers_activation() -> None:
+    """The whole point: provisioning must not apply the config or touch the
+    network managers, so the unit stays reachable on the bench it booted on."""
+    text = FIRSTBOOT.read_text()
+    assert "--defer-activation" in text
+    assert re.search(r"install\.sh\S*\s+--defer-activation", text), text
+
+
+def test_firstboot_creates_the_hold_for_a_hand_staged_card() -> None:
+    """The Windows path in docs/sd-image.md copies files by hand, with no
+    prep-card run to write the marker."""
+    text = FIRSTBOOT.read_text()
+    assert ': >"$HOLD_MARKER"' in text
+    marker_at = text.index("created $HOLD_MARKER")
+    install_at = text.index("--defer-activation /etc/combiner/site.yaml")
+    assert marker_at < install_at, "the hold must exist before install.sh runs"
+
+
+def test_install_defers_the_network_manager_swap() -> None:
+    """Under --defer-activation the three steps that take the box off the bench
+    network — the networkd swap, enabling the units, and the forced apply — must
+    all sit behind the guard."""
+    text = INSTALL.read_text()
+    guard = text.index('if [[ "$DEFER_ACTIVATION" -eq 0 ]]; then')
+    for step in (
+        "systemctl disable --now NetworkManager",
+        "systemctl enable systemd-networkd",
+    ):
+        assert text.index(step) > guard, step
+    apply_guard = text.rindex('if [[ "$DEFER_ACTIVATION" -eq 0 ]]; then')
+    for step in (
+        "systemctl enable nftables combiner combiner-apply",
+        "--force",
+    ):
+        assert text.index(step) > apply_guard, step
+
+
+def test_install_ships_go_live_and_the_led_helper() -> None:
+    """combiner-go-live is what releases a deferred install; a unit missing it
+    would be held with no way out short of editing the card."""
+    text = INSTALL.read_text()
+    assert "/usr/local/sbin/combiner-go-live" in text
+    assert "/usr/local/sbin/combiner-led" in text
+    assert "combiner-signal.service" in text
+
+
+def test_install_stages_allowlists_when_deferring() -> None:
+    """The release tree may be gone by the time go-live runs, and combiner-apply
+    refuses to apply without allowlists — it would die rather than apply."""
+    text = INSTALL.read_text()
+    # Between the forced apply (the non-deferred branch) and the end of the
+    # guard is the deferred branch, and that is where the staging has to be.
+    branch = text.index("systemctl enable nftables combiner combiner-apply")
+    assert text.index('cp -a "$ROOT/config/allowlists/." /etc/combiner/allowlists/') > branch
+
+
+def test_apply_holds_while_the_marker_is_present() -> None:
+    """This is what makes the second boot automatic: go-live only removes the
+    marker and reboots, and the existing every-boot unit does the rest."""
+    text = APPLY.read_text()
+    hold = text.index('if [[ -e "$HOLD_MARKER"')
+    first_write = text.index("write_forwarding 0")
+    assert hold < first_write, "the hold must precede anything that changes the box"
+
+
+def test_apply_exempts_dry_run_from_the_hold() -> None:
+    """combiner-go-live validates with --dry-run while the hold is by definition
+    still in place. If the hold swallowed that, go-live would commit to a config
+    nothing had checked."""
+    text = APPLY.read_text()
+    guard = re.search(r'if \[\[ -e "\$HOLD_MARKER".*?\]\]; then', text, re.S)
+    assert guard, text
+    assert "$DRY_RUN" in guard.group(0)
+    assert "$FORCE" in guard.group(0)
+
+
+def _go_live_forward_path() -> str:
+    """Just the go-live direction. --undo comes earlier in the file and has its
+    own reboot, so a whole-file index() would match the wrong one."""
+    text = GO_LIVE.read_text()
+    return text[text.index("# --- guards ---") :]
+
+
+def test_go_live_validates_before_it_commits() -> None:
+    """The unit is reachable right up until the reboot, and unreachable after.
+    A config that would be rejected has to be found on the near side of that."""
+    text = _go_live_forward_path()
+    dry_run = text.index("--dry-run")
+    for later in ("systemctl enable systemd-networkd", 'rm -f "$HOLD_MARKER"', "systemctl reboot"):
+        assert text.index(later) > dry_run, later
+
+
+def test_go_live_does_not_tear_down_the_network_manager_it_is_running_over() -> None:
+    """--now here would kill the SSH session before the marker is cleared,
+    leaving a unit both unreachable and still held. The reboot does the swap."""
+    text = GO_LIVE.read_text()
+    assert not re.search(r"systemctl disable --now\s+(NetworkManager|dhcpcd|\"\$svc\")", text), text
+    assert 'systemctl disable "$svc"' in text
+
+
+def test_go_live_clears_the_hold_last() -> None:
+    """A half-released unit — marker gone, units not enabled — comes up on show
+    addressing with nothing running."""
+    text = _go_live_forward_path()
+    assert text.index("systemctl enable nftables combiner combiner-apply") < text.index('rm -f "$HOLD_MARKER"')
+
+
+def test_go_live_undo_unpicks_the_handover_not_just_the_marker() -> None:
+    """Re-creating the marker on a live unit is not enough: the hold stops
+    combiner-apply from applying a config, it does not unpick one already
+    applied. Without the handover back, the unit returns on show addressing —
+    held, and just as unreachable as before."""
+    text = GO_LIVE.read_text()
+    undo = text[text.index('if [[ "$ACTION" == "undo" ]]; then') :]
+    assert "systemctl enable NetworkManager" in undo
+    assert "systemctl disable systemd-networkd" in undo
+    assert "combiner*.netdev" in undo
+    assert "99-combiner.conf" in undo
+    # The marker first, so a failure part-way leaves a unit that holds rather
+    # than one that re-applies the config it is being taken off.
+    assert undo.index(': >"$HOLD_MARKER"') < undo.index("systemctl disable systemd-networkd")
+
+
+def test_go_live_refuses_a_locked_root() -> None:
+    """Every step is a systemctl enable/disable, which writes under /etc. Under
+    an overlay those evaporate on the very reboot this script performs."""
+    text = GO_LIVE.read_text()
+    assert "overlayroot=tmpfs' /proc/cmdline" in text
+    assert "combiner-lock --off" in text
+    guard = text.index("overlayroot=tmpfs' /proc/cmdline")
+    first_write = text.index("systemctl enable systemd-networkd")
+    assert guard < first_write, "the guard must precede the first write"
+
+
+@pytest.mark.parametrize("script", [GO_LIVE, LED], ids=["combiner-go-live", "combiner-led"])
+def test_go_live_and_led_need_no_network(script: Path) -> None:
+    """Both run on a unit that may already be racked."""
+    text = script.read_text()
+    invocations = [ln for ln in text.splitlines() if re.match(r"\s*(\w+=\S+\s+)*(apt-get|curl|wget)\b", ln)]
+    assert not invocations, invocations
+
+
+@pytest.mark.parametrize("state", ["provisioning", "ready", "failed", "running", "auto", "off"])
+def test_led_succeeds_without_an_led(state: str) -> None:
+    """There is no LED on a laptop or an amd64 host, and a unit whose LED cannot
+    be driven must still provision, go live and run — every caller is on a path
+    that must not fail. Run for real: this is the whole contract."""
+    r = subprocess.run(["bash", str(LED), state], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+
+def test_led_rejects_a_misspelled_state() -> None:
+    """Validated before the hardware probe, on purpose. A typo is a caller bug
+    on every machine, and most machines this is edited on have no LED — exiting
+    0 there is how a broken call would reach a Pi."""
+    r = subprocess.run(["bash", str(LED), "bogus"], capture_output=True, text=True)
+    assert r.returncode == 1
+    assert "unknown state" in r.stderr
+
+
+def test_led_signal_unit_runs_last() -> None:
+    """It reports what happened, not what was about to."""
+    unit = (SYSTEMD / "combiner-signal.service").read_text()
+    assert "After=combiner-apply.service combiner.service" in unit
+    assert "combiner-led auto" in unit
+    assert "WantedBy=multi-user.target" in unit
+
+
+def test_seal_accepts_a_held_golden_unit() -> None:
+    """Sealing a held unit is the normal case, not an error. Seal strips
+    /etc/combiner/site.yaml anyway — each clone brings its own — so the golden
+    unit never needed to apply one, and insisting it go live first would mean
+    putting a production config onto a bench that cannot satisfy those VLANs,
+    leaving the very unit about to be imaged unreachable and failing."""
+    text = SEAL.read_text()
+    assert "WAS_HELD" in text
+    assert 'die "this unit is still holding' not in text
+
+
+def test_seal_takes_a_held_unit_live_before_imaging_it() -> None:
+    """A held unit was installed with --defer-activation, so nftables, combiner
+    and combiner-apply are installed and NOT enabled. Imaging that produces a
+    fleet that boots, applies nothing, and looks fine. Delegated to
+    combiner-go-live rather than duplicated, so "live" has one definition."""
+    text = SEAL.read_text()
+    assert "/usr/local/sbin/combiner-go-live --yes --no-reboot" in text
+    # go-live validates against /etc/combiner/site.yaml, which seal removes.
+    assert text.index("combiner-go-live --yes --no-reboot") < text.index("rm -f /etc/combiner/site.yaml")
+
+
+def test_seal_images_no_provisioning_hold() -> None:
+    """A card imaged with the marker on it strands a whole fleet waiting for a
+    combiner-go-live nobody can run in a rack."""
+    text = SEAL.read_text()
+    assert 'rm -f "$HOLD_MARKER"' in text
+    # Before the closing instructions, or the operator images a card that holds.
+    assert text.index('rm -f "$HOLD_MARKER"') < text.index("Image the card")
+
+
+def test_finalize_refuses_while_held() -> None:
+    """A held unit's combiner-apply.service succeeds without applying anything,
+    so the 'is it configured' check would pass on a box that never was."""
+    text = FINALIZE.read_text()
+    hold = text.index('if [[ -e "$HOLD_MARKER" ]]; then')
+    lock = text.index("locking root filesystem read-only")
+    assert hold < lock
+
+
+def test_finalize_condition_covers_both_boot_paths() -> None:
+    """The script falls back to /boot on images that predate /boot/firmware; a
+    condition naming only the new path would skip the unit on exactly those."""
+    unit = (SYSTEMD / "combiner-finalize.service").read_text()
+    assert "ConditionPathExists=|/boot/firmware/cmdline.txt" in unit
+    assert "ConditionPathExists=|/boot/cmdline.txt" in unit
+
+
+MAKEFILE = REPO_ROOT / "Makefile"
+
+
+def _make_recipe(target: str) -> str:
+    """The body of one Makefile target. Searching the whole file instead is how
+    the first version of this test passed while the package was broken: the
+    shellcheck target names the same scripts."""
+    make = MAKEFILE.read_text()
+    body = re.search(rf"^{target}:[^\n]*\n((?:[\t#].*\n|\n)*)", make, re.M)
+    assert body, f"no {target} target in the Makefile"
+    return body.group(1)
+
+
+def test_the_release_package_ships_everything_install_needs() -> None:
+    """install.sh installs from the unpacked release tree, so a file it names
+    that `make package` does not copy is a release that fails on first boot —
+    and only there. The package's cp list is explicit and drifts silently: it
+    already missed combiner-go-live.sh and combiner-led.sh once."""
+    package = _make_recipe("package")
+    # Directories the package copies wholesale, so their contents need no entry.
+    wholesale = ("systemd/", "cloud-init/")
+    for d in wholesale:
+        assert f"deploy/pi/{d.rstrip('/')}" in package, d
+    needed = sorted(re.findall(r'"\$ROOT/deploy/pi/([^"]+)"', INSTALL.read_text()))
+    missing = [f for f in needed if not f.startswith(wholesale) and f"deploy/pi/{f} " not in package]
+    assert not missing, f"make package does not ship: {missing}"
+
+
+def test_the_release_package_makes_its_scripts_executable() -> None:
+    """install.sh runs them out of the unpacked tree, and tar preserves whatever
+    mode the staging copy had."""
+    package = _make_recipe("package")
+    chmod = package[package.index("chmod 755") :]
+    for script in ("combiner-go-live.sh", "combiner-led.sh", "combiner-lock.sh"):
+        assert f"deploy/pi/{script}" in chmod, script

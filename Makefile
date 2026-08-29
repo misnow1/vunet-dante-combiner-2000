@@ -57,6 +57,8 @@ package: build-pi build-pi-arm build-linux-amd64
 			deploy/pi/combiner-seal.sh \
 			deploy/pi/combiner-finalize.sh \
 			deploy/pi/combiner-lock.sh \
+			deploy/pi/combiner-go-live.sh \
+			deploy/pi/combiner-led.sh \
 			deploy/pi/generate-nftables.py \
 			deploy/pi/generate-nftables.sh \
 			deploy/pi/generate-network-config.py \
@@ -76,6 +78,8 @@ package: build-pi build-pi-arm build-linux-amd64
 			"$$stage/deploy/pi/combiner-seal.sh" \
 			"$$stage/deploy/pi/combiner-finalize.sh" \
 			"$$stage/deploy/pi/combiner-lock.sh" \
+			"$$stage/deploy/pi/combiner-go-live.sh" \
+			"$$stage/deploy/pi/combiner-led.sh" \
 			"$$stage/deploy/pi/cloud-init/combiner-firstboot.sh" \
 			"$$stage/deploy/pi/generate-nftables.py" \
 			"$$stage/deploy/pi/generate-nftables.sh" \
@@ -93,6 +97,7 @@ shellcheck:
 		shellcheck -S warning deploy/pi/install.sh deploy/pi/prep-card.sh \
 			deploy/pi/combiner-apply.sh deploy/pi/combiner-seal.sh \
 			deploy/pi/combiner-finalize.sh deploy/pi/combiner-lock.sh \
+			deploy/pi/combiner-go-live.sh deploy/pi/combiner-led.sh \
 			deploy/pi/cloud-init/combiner-firstboot.sh deploy/pi/generate-nftables.sh; \
 		echo "shellcheck OK"; \
 	else \

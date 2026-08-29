@@ -17,6 +17,7 @@ set -euo pipefail
 BOOT_DIR="/boot/firmware"
 [[ -d "$BOOT_DIR" ]] || BOOT_DIR="/boot"
 CMDLINE="$BOOT_DIR/cmdline.txt"
+HOLD_MARKER="$BOOT_DIR/combiner-provisioning"
 
 say() { echo "combiner-finalize: $*"; }
 
@@ -52,6 +53,14 @@ fi
 # --- is the unit actually working? ------------------------------------------
 # Freezing a misconfigured box makes it harder to fix, so only lock one whose
 # config actually applied.
+# A held unit's combiner-apply.service succeeds without applying anything, so
+# the check below would pass on a box that has never been configured at all.
+if [[ -e "$HOLD_MARKER" ]]; then
+  say "this unit is still holding — refusing to lock one that has never gone live"
+  say "run combiner-go-live; this will retry on the boot after that"
+  exit 0
+fi
+
 if ! systemctl is-active --quiet combiner-apply.service; then
   say "combiner-apply has not succeeded — refusing to lock a unit that is not configured"
   say "fix the config on the boot partition; this will retry on the next boot"
@@ -59,9 +68,9 @@ if ! systemctl is-active --quiet combiner-apply.service; then
 fi
 
 # --- can we lock offline? ---------------------------------------------------
-# combiner-seal installs overlayroot at bench time precisely so this step needs
-# no network. If it is missing we cannot lock, and must not try to apt-get it
-# on a unit that may be in a rack.
+# overlayroot ships as a provisioning dependency (see cloud-init/user-data)
+# precisely so this step needs no network. If it is missing we cannot lock, and
+# must not try to apt-get it on a unit that may be in a rack.
 if ! dpkg -s overlayroot >/dev/null 2>&1; then
   say "overlayroot is not installed — cannot lock the root filesystem"
   say "install it where there is a network (apt-get install overlayroot), then re-seal"

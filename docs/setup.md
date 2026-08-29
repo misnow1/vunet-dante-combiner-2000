@@ -141,7 +141,8 @@ Building binaries yourself, the `virgil01` lab board, and Go: [`pi-prep.md`](pi-
 
 Prefer not to run the installer by hand? [`sd-image.md`](sd-image.md) prepares a
 card at the bench that provisions itself on first boot — validated before it is
-written, and offline-capable once the tarball is staged.
+written. That unit boots twice: the first boot provisions on DHCP and holds,
+still reachable, and `combiner-go-live` applies the config and reboots into it.
 
 ## 5. Check that it works
 

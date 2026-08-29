@@ -14,6 +14,21 @@ import (
 	"github.com/msnow/vunet-dante-combiner-2000/internal/nftstatus"
 )
 
+// provisioningHold reports whether the card still carries the marker that keeps
+// combiner-apply from touching the network. Both paths, because /boot/firmware
+// is only where newer Raspberry Pi OS mounts the FAT partition.
+func provisioningHold() bool {
+	for _, p := range []string{
+		"/boot/firmware/combiner-provisioning",
+		"/boot/combiner-provisioning",
+	} {
+		if _, err := os.Stat(p); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 func main() {
 	cfgPath := flag.String("config", "/etc/combiner/site.yaml", "path to site.yaml")
 	asJSON := flag.Bool("json", false, "emit JSON")
@@ -33,12 +48,14 @@ func main() {
 
 	type snap struct {
 		Version    string                `json:"version"`
+		Holding    bool                  `json:"provisioning_hold"`
 		Interfaces []netinfo.IfaceStatus `json:"interfaces"`
 		NFT        nftstatus.Counters    `json:"nft"`
 		DHCPLeases []string              `json:"dhcp_leases"`
 	}
 	s := snap{
 		Version: buildinfo.String(),
+		Holding: provisioningHold(),
 		NFT:     nftstatus.Read(),
 		DHCPLeases: netinfo.DHCPLeases(
 			"/var/lib/misc/dnsmasq.leases",
@@ -64,6 +81,13 @@ func main() {
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintf(w, "combiner %s\n\n", s.Version)
+	// A held unit has applied nothing, so every line below describes the bench
+	// network it happens to have booted on rather than the config it carries.
+	// Say so first, or the output reads as a broken unit.
+	if s.Holding {
+		fmt.Fprintf(w, "PROVISIONED — AWAITING GO-LIVE\n")
+		fmt.Fprintf(w, "This unit has not applied its config. Run: sudo combiner-go-live\n\n")
+	}
 	fmt.Fprintln(w, "ROLE\tIFACE\tUP\tADDRESSES")
 	for _, i := range s.Interfaces {
 		fmt.Fprintf(w, "%s\t%s\t%v\t%s\n", i.Role, i.Name, i.Up, join(i.Addresses))

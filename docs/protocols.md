@@ -2,7 +2,7 @@
 
 Cited notes on how each control/audio protocol behaves on the wire, and what that means for the combiner. Operational allow/deny tables live in [`traffic-matrix.md`](traffic-matrix.md). Cabling and install: [`setup.md`](setup.md). This file is the *why*.
 
-Laptops and iPads sit on **Martin Control** with VuNET, Yamaha mixer-control, and Allen & Heath MixPad. The combiner only stitches **Dante-side** discovery/control (Dante Controller, Lake, Shure WWB) onto that VLAN. **Waves SoundGrid** is a third island and is never trunked.
+In the shipped profile (`client_vlan: dante`, both example configs) laptops and iPads sit on **Dante Primary**, where Dante Controller, Lake and Shure WWB are native. The combiner stitches **Martin VuNET** onto that VLAN so the same client can reach the amps on Control. Under the `client_vlan: control` alternative the roles invert — see §VuNET below. **Waves SoundGrid** is a third island either way, and is never trunked.
 
 | Protocol | Combiner role |
 | --- | --- |

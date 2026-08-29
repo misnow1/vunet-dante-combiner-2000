@@ -1,22 +1,24 @@
 # Break-glass procedure
 
-If the combiner is down, Control clients **lose the SNAT path to Dante** (Dante Controller, WWB, Lake). VuNET, StageMix, and MixPad on Control keep working if the WAP and Control VLAN are up.
+If the combiner is down, clients **lose the path to the Martin amps** — VuNET stops discovering and stops controlling. Dante Controller, WWB and Lake keep working if the Dante VLAN is up, because in the shipped profile the client is already on Dante and never needed the combiner for those.
 
-Do **not** fail open by pointing Control clients at a switch SVI as a gateway “workaround” onto Dante. That reintroduces asymmetric paths and can look half-working while bypassing SNAT — and it is how PTP/media leaks start.
+(That is for `client_vlan: dante`, which both shipped profiles use. If your site runs `client_vlan: control`, read every direction here reversed: VuNET survives and Dante Controller / WWB / Lake are what you lose.)
+
+Do **not** fail open by pointing clients at a switch SVI as a gateway “workaround” onto the other VLAN. That reintroduces asymmetric paths and can look half-working while bypassing SNAT — and it is how PTP/media leaks start.
 
 ## Immediate recovery
 
-1. **VuNET / Yamaha / MixPad** — Stay on the **Martin Control** SSID/access port. This path does not need the combiner.
-2. **Dante Controller / Lake / WWB** — Connect a laptop to the **Dante** VLAN (access port or correct SSID), as before the combiner existed.
+1. **Dante Controller / Lake / WWB** — Stay where you are, on the **Dante** VLAN. This path never needed the combiner.
+2. **VuNET / Yamaha / MixPad** — Connect a laptop to the **Martin Control** VLAN (access port or correct SSID), as before the combiner existed.
 3. Need VuNET and Dante Controller at once — Dual NIC / two cables / two interfaces.
 4. **DiGiCo + Waves SoundGrid** — Stay on the SoundGrid switch. Never patch SG onto Control to “share the WAP.”
 
 ## Confirm combiner death vs client issue
 
-On a Control client:
+On a client (on Dante, in the shipped profile):
 
-- Ping the combiner Control IP
-- Open `http://<control-ip>:8080/`
+- Ping the combiner Dante IP
+- Open `http://<dante-ip>:8080/`
 - If neither works, assume combiner/WAP/path failure and fall back as above
 
 From a console on the combiner (if reachable):

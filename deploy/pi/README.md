@@ -112,7 +112,7 @@ vlans:
 
 Result: `10-combiner-trunk.network` carries `Address=10.201.0.1/21` plus `VLAN=eth0.200`, and only `20-combiner-control.netdev` is written.
 
-**Untagged Mgmt (flat lab LAN)** — lab boards on an access/native port (e.g. `virgil` on `192.168.33.x`) use [`config/site.lab-flat.example.yaml`](../../config/site.lab-flat.example.yaml). That Mgmt face is a **Pi uplink**, not the client network. Production clients live on Control.
+**Untagged Mgmt (flat lab LAN)** — lab boards on an access/native port (e.g. `virgil` on `192.168.33.x`) use [`config/site.lab-flat.example.yaml`](../../config/site.lab-flat.example.yaml). That Mgmt face is a **Pi uplink**, not the client network. Production clients live on whichever VLAN `client_vlan` names — Dante, in both shipped profiles.
 
 ```yaml
 vlans:
@@ -129,7 +129,7 @@ vlans:
 
 Mgmt L3 lands on `physical_interface` (no `eth0.<mgmt-id>`); Control and Dante stay 802.1Q subinterfaces. Switch port: untagged Mgmt + tagged Control/Dante, or a temporary access port for Mgmt-only smoke tests.
 
-**`gateway` / `dns` are lab-only** for the Pi’s own uplink. They are never advertised to Control clients.
+**`gateway` / `dns` are lab-only** for the Pi’s own uplink. They are never advertised to the audio VLANs' clients.
 
 Reserve the Mgmt address in the LAN router so nothing else claims it.
 

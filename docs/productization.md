@@ -31,15 +31,17 @@ Eval checklist:
 
 ## Dante metering path (“full glass”)
 
-MVP nftables already forwards established unicast Control→Dante, which includes Controller metering (UDP **8751**) and control ports (**4440/4444/4455/8800**). After discovery works:
+**Largely solved by `client_vlan: dante`, which is what both profiles now ship.** Dante Controller's metering tab and device config need L2 adjacency; SNAT carries discovery and some control but cannot supply that. Putting the client on Dante fixes it natively rather than chasing ports — which is why the shipped profile does, and why the combiner carries VuNET the other way instead.
 
-1. Confirm meters in Dante Controller on Control
+The notes below apply only to the `client_vlan: control` alternative, where metering has to cross the combiner:
+
+1. nftables forwards established unicast client→peer, which includes Controller metering (UDP **8751**) and control ports (**4440/4444/4455/8800**)
 2. If meters fail, capture unicast ports and tighten/document in `dante_unicast_udp_ports`
 3. Still **never** reflect ATP/AES67 media multicast
 
 ## Optional switch ACL hardening
 
-Do not let Control clients bypass the combiner via a switch SVI into Dante (same rule as DHCP in [`setup.md`](setup.md): option 3 is the combiner, not an SVI). Deny Control-SVI→Dante routed traffic or omit the SVI; keep the combiner trunk; never carry SoundGrid on that trunk or the Control SSID; leave break-glass Dante access ports.
+Do not let clients bypass the combiner via a switch SVI into the peer VLAN (same rule as DHCP in [`setup.md`](setup.md#3-dhcp): option 3 is the combiner, not an SVI). In the shipped profile that means denying Dante-SVI→Control routed traffic, or omitting the SVI; keep the combiner trunk; never carry SoundGrid on that trunk or the client SSID; leave break-glass access ports on both VLANs.
 
 ## Metering / productization status page extras (future)
 

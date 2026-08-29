@@ -39,7 +39,7 @@ So the two protocols want opposite sides of the combiner, and which one gets to 
 | Dante metering / device config | **Not available** | Works |
 | Example | none shipped — omit `client_vlan` (it defaults to `control`) | [`site.example.yaml`](../config/site.example.yaml), [`site.lab-flat.example.yaml`](../config/site.lab-flat.example.yaml) |
 
-Pick `dante` when the operator needs full Dante Controller. Keep the default when clients are **tablets on Wi-Fi**: that profile puts the WAP on Dante Primary, exposing PTP and any multicast audio to a medium that carries multicast at low basic rates — the same *class* of problem the design avoids for the amp stack.
+Pick `dante` — as both shipped profiles do — when the operator needs full Dante Controller. Prefer `control` when clients are **tablets on Wi-Fi**, because `dante` puts the WAP on Dante Primary, exposing PTP and any multicast audio to a medium that carries multicast at low basic rates — the same *class* of problem the design avoids for the amp stack.
 
 What `client_vlan` deliberately does **not** move is the PTP/AES67/ATP deny direction. Those stay anchored to Control because they exist to keep the amp stack quiet. Letting them follow the client would drop PTP toward Dante and break the clock of the network the combiner exists to carry.
 
@@ -61,7 +61,7 @@ Physical ports and the WAP are in [`setup.md`](setup.md). SoundGrid stays on its
 
 ## Isolation
 
-Roles below are **client** and **peer**, which follow `client_vlan`; under the default profile the client is Control and the peer is Dante.
+Roles below are **client** and **peer**, which follow `client_vlan`. Under `client_vlan: control` the client is Control and the peer is Dante; under `client_vlan: dante` — what both shipped profiles use — it is the other way round.
 
 | Path | Policy |
 | --- | --- |
@@ -75,7 +75,7 @@ Reflected under the **default** profile (light vs PTP): mDNS, Dante `224.0.0.230
 
 The meeting point for the reflected side's apps is **software on the client**, not an L2 bridge. Do not use a switch SVI as a shortcut Control→Dante ([`setup.md`](setup.md) DHCP). Break-glass: [`break-glass.md`](break-glass.md).
 
-Multiple Control clients are fine at the network layer. VuNET and Lake still allow only one “brain” app instance — that is an application limit.
+Multiple clients are fine at the network layer. VuNET and Lake still allow only one “brain” app instance — that is an application limit.
 
 ## Data plane
 
@@ -83,7 +83,7 @@ Multiple Control clients are fine at the network layer. VuNET and Lake still all
 | --- | --- |
 | `nftables` + `ip_forward` | Unicast SNAT, isolation, counters |
 | Userspace reflector | Allowlisted multicast client↔peer |
-| Core DHCP | Control clients; combiner does not DHCP Control or Dante |
+| Core DHCP | The client VLAN; combiner does not DHCP Control or Dante |
 
 ## Non-goals
 

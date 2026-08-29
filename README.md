@@ -4,17 +4,22 @@
 [![Release](https://github.com/misnow1/vunet-dante-combiner-2000/actions/workflows/release.yml/badge.svg)](https://github.com/misnow1/vunet-dante-combiner-2000/actions/workflows/release.yml)
 [![GitHub release](https://img.shields.io/github/v/release/misnow1/vunet-dante-combiner-2000)](https://github.com/misnow1/vunet-dante-combiner-2000/releases/latest)
 
-A portable Linux gateway so one control client (laptop or tablet) on the **Martin Control** VLAN can run **VuNET**, mixer apps, **Dante Controller**, **Lake Controller**, and **Shure WWB** without dual NICs — while keeping amp control off Dante PTP and never attaching Waves SoundGrid.
+A portable Linux gateway so one control client (laptop or tablet) can run **VuNET**, mixer apps, **Dante Controller**, **Lake Controller**, and **Shure WWB** from a single NIC — while keeping amp control off Dante PTP and never attaching Waves SoundGrid.
+
+In the shipped profile the client sits on **Dante Primary**, where Dante Controller, WWB and Lake all work natively (metering and device config need L2 adjacency, which no amount of forwarding can supply). The combiner carries **Martin VuNET** the other way, to the amps on Control.
 
 ## What it does
 
-- Attaches to a switch **trunk** with **Martin Control** and **Dante** (optional lab Mgmt for the Pi uplink). Either VLAN may be the port's untagged/PVID VLAN — the default profile matches an **audio trunk** port (untagged Dante, tagged Control)
-- Control clients share the amp/console VLAN; **SNATs** unicast Control→Dante so Dante/Lake/Shure devices see an on-subnet peer
-- **Reflects allowlisted multicast** discovery/control **Control↔Dante** (Dante, Shure, Lake after capture)
+- Attaches to a switch **trunk** carrying **Martin Control** and **Dante** (optional lab Mgmt for the Pi uplink). Either VLAN may be the port's untagged/PVID VLAN — the shipped profile matches an **audio trunk** port (untagged Dante, tagged Control)
+- Clients share the Dante broadcast domain, so Dante Controller, Lake and WWB are native. The combiner **SNATs** unicast Dante→Control so the Martin amps see an on-subnet peer
+- **Reflects allowlisted multicast** discovery/control between the two VLANs — VuNET amp discovery in the shipped profile
 - **Drops** PTP / multicast media toward Control; does not trunk SoundGrid
 
-**Install a device:** [`docs/setup.md`](docs/setup.md) — addresses, switch ports, DHCP, Raspberry Pi software, and first checks.
-Or prepare a self-provisioning **microSD card** at the bench: [`docs/sd-image.md`](docs/sd-image.md).
+Which side the clients sit on is one setting, `client_vlan`. Both shipped profiles use `client_vlan: dante`; the `control` alternative is described in [`docs/architecture.md`](docs/architecture.md#two-profiles).
+
+**Build a unit from a microSD card** (the normal path): [`docs/sd-image.md`](docs/sd-image.md). Stage the card at a bench, boot it on any LAN with DHCP, and it provisions itself and then **waits** — nothing is applied until you have checked it and run `combiner-go-live`, which reboots it onto its show addressing. A unit boots twice on purpose.
+
+**Or install by hand** on a Pi you already have: [`docs/setup.md`](docs/setup.md) — addresses, switch ports, DHCP, and first checks.
 
 ## Docs
 

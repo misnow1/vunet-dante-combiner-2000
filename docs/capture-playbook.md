@@ -6,11 +6,19 @@ Background: [`protocols.md`](protocols.md). Allow/deny: [`traffic-matrix.md`](tr
 
 ## Goals
 
-1. Confirm Dante groups in `config/allowlists/dante.yaml`
-2. Confirm Shure Discovery `239.255.254.253:8427` (and that PTP is absent from allowlists)
-3. Produce allowlist entries for `config/allowlists/lake.yaml`
-4. Optional: document VuNET talkers for operators (do **not** load them into the reflector)
-5. Never leave a capture NIC bridging Control, Dante, or SoundGrid
+Which of these matter depends on `client_vlan` — see [`traffic-matrix.md`](traffic-matrix.md). Both shipped profiles use `client_vlan: dante`, where **VuNET is the only allowlist loaded**.
+
+For the shipped profile:
+
+1. Confirm the VuNET discovery groups in [`config/allowlists/vunet.yaml`](../config/allowlists/vunet.yaml) against your own amps
+2. Confirm PTP and media groups are absent from every allowlist
+3. Never leave a capture NIC bridging Control, Dante, or SoundGrid
+
+For `client_vlan: control` (no example ships), the reflected set inverts:
+
+4. Confirm Dante groups in `config/allowlists/dante.yaml`
+5. Confirm Shure Discovery `239.255.254.253:8427`
+6. Produce allowlist entries for `config/allowlists/lake.yaml`
 
 ## Safety
 
@@ -59,11 +67,13 @@ Expect `239.255.254.253` UDP **8427**. mDNS `224.0.0.251:5353` is already covere
 
 Unicast after discovery is typically UDP **5568** (and sometimes **2200–2201**); those use SNAT, not the reflector.
 
-## VuNET (Martin Control VLAN) — documentation only
+## VuNET (Martin Control VLAN)
 
-VuNET is native L2 on Control. Capture only if you want a record of groups/ports; **do not** add them to combiner allowlists (`vlan` must be `dante`).
+**Under the shipped `client_vlan: dante` profile this is the capture that matters.** VuNET is the reflected protocol: the amps announce on Control and the combiner copies those groups onto Dante, where the client is. The resulting entries belong in [`config/allowlists/vunet.yaml`](../config/allowlists/vunet.yaml) with `vlan: control`, because the field names the **peer** role — the VLAN the amps are on — not the client's.
 
-1. Connect one NIC to Control only (same VLAN as the WAP/clients)
+Under `client_vlan: control` the opposite holds: clients already share Control with the amps, VuNET is native L2, and this group must **not** be allowlisted — reflecting it would hairpin Control onto itself and the config loader rejects it. Capture it there only to document what the amps emit.
+
+1. Connect one NIC to Control only (same VLAN as the amps)
 2. Launch VuNET, wait until amps appear, perform a safe control action
 
 ```bash
@@ -114,4 +124,4 @@ Watch the status page inventory populate as **Dante-side** discovery is reflecte
 | Wireless Workbench | Receivers listed; unicast control works (SNAT) |
 | Lake Controller | Frames listed after Lake groups are allowlisted; can control |
 
-If Dante/WWB/Lake discovery works but unicast control fails, check `snat_to_dante` and that the combiner has the correct static IP on Dante. Control clients must use the **combiner Control IP as default gateway** ([`setup.md`](setup.md)) so Dante destinations are routed through SNAT — not a switch SVI.
+If VuNET discovery works but unicast control fails, check `snat_to_control` and that the combiner has the correct static IP on Control. Clients must use the **combiner Dante IP as default gateway** ([`setup.md`](setup.md#dante-where-the-clients-are)) so Control destinations are routed through SNAT — not a switch SVI. (Under `client_vlan: control` this reads the other way: `snat_to_dante`, and the combiner's Control IP as the gateway.)

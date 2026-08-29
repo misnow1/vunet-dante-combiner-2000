@@ -4,6 +4,13 @@ Prepare a card at the bench, put it in a Pi, and let it provision itself — no
 shell session, no Go toolchain, and (if you stage the tarball) no Internet.
 Running the installer by hand instead: [`setup.md`](setup.md).
 
+**Provisioning needs a network with Internet access.** The first boot refreshes
+the apt index and installs `conntrack` and `overlayroot` (plus `systemd-resolved`
+if the profile configures mgmt DNS) — a few hundred kB, but a working mirror is
+required, along with DHCP and DNS on whatever bench network the unit boots on.
+That is a bench-time requirement only: once provisioned, a unit never needs the
+network again, which is what makes a rack with no Internet workable.
+
 Two facts about the deployment drive the design:
 
 - **A racked Pi has no Internet.** Anything needing a package mirror happens at
@@ -292,8 +299,8 @@ It refuses to lock, and retries on the next boot, when:
   finished becoming itself
 - `combiner-apply` has not succeeded — freezing a misconfigured unit only makes
   it harder to fix
-- `overlayroot` is not installed — `combiner-seal` installs it at bench time
-  precisely so this step needs no network
+- `overlayroot` is not installed — it ships as a provisioning dependency
+  precisely so locking needs no network
 
 ### Unlocking for maintenance
 
@@ -322,6 +329,25 @@ tmpfs layer — so unlocking restores ordinary behaviour with nothing to undo.
 remount `/` from fstab, which overlayfs rejects outright, and a permanently
 failed unit would destroy `systemctl --failed` as a health signal on a box
 nobody can inspect. The condition lifts by itself when the root is unlocked.
+
+## Changing the config on a locked unit
+
+Locking the root does **not** freeze the configuration. `combiner-site.yaml`
+lives on the FAT boot partition, which stays writable, and `combiner-apply`
+re-reads it on every boot. So the field workflow is unchanged by locking:
+
+1. Pull the card, edit `combiner-site.yaml` on a laptop (it mounts in Finder and
+   Explorer), reseat it.
+2. Power on. `combiner-apply` notices the config differs from what is live and
+   paves the new one in.
+
+`prep-card.sh --check-card` validates the edited file before you boot it, which
+is worth doing — a rejected config leaves the unit running its previous one and
+the reason lands in `combiner-apply.log` on the card.
+
+The only thing locking prevents is a change made *inside* the running system
+persisting: edit `/etc/combiner/site.yaml` directly and the next boot puts it
+back from the card. That is deliberate — the card is the source of truth.
 
 ## Updating a racked unit## Updating a racked unit
 

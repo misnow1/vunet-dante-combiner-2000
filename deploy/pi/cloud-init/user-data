@@ -62,6 +62,10 @@ packages:
   - python3-yaml
   - iproute2
   - conntrack
+  # Every unit locks its root eventually (combiner-lock / combiner-seal), and
+  # that step must work in a rack with no network. Install it here, where the
+  # bench network is, rather than at lock time. Pulls cryptsetup with it.
+  - overlayroot
 
 runcmd:
   # FIRST, and never allowed to fail the boot. Two separate things go wrong

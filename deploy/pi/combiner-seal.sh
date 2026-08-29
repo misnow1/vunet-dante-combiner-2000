@@ -212,12 +212,12 @@ fi
 # overlayroot is installed HERE, where there is a bench network, so the locking
 # step itself needs none.
 arm_overlay() {
-  if ! dpkg -s overlayroot >/dev/null 2>&1; then
-    say "installing overlayroot (needs the bench network; the lock step will not)"
-    if ! DEBIAN_FRONTEND=noninteractive apt-get install -y overlayroot; then
-      die "could not install overlayroot — re-run with a network, or --no-overlay"
-    fi
-  fi
+  # overlayroot ships as a provisioning dependency (see user-data), so there is
+  # no apt call here — sealing works on a unit with no network.
+  dpkg -s overlayroot >/dev/null 2>&1 ||
+    die "overlayroot is not installed. It ships as a provisioning dependency, so
+this unit predates that change. Install it (apt-get install overlayroot) and
+re-run, or pass --no-overlay to seal without arming the read-only root."
   # install.sh ships both; seal only decides whether they are armed.
   [[ -x /usr/local/sbin/combiner-finalize ]] ||
     die "combiner-finalize is not installed — re-run install.sh from a release tree"

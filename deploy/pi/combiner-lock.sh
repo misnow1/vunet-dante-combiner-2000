@@ -99,11 +99,13 @@ command -v combiner >/dev/null 2>&1 || die "combiner is not installed — run in
 combiner -check -config /etc/combiner/site.yaml >/dev/null ||
   die "the installed config does not validate — fix it before locking"
 
-if ! dpkg -s overlayroot >/dev/null 2>&1; then
-  say "installing overlayroot (needs a network now; the lock itself will not)"
-  DEBIAN_FRONTEND=noninteractive apt-get install -y overlayroot ||
-    die "could not install overlayroot — connect a network and retry"
-fi
+# No apt here on purpose: this may run on a unit already in a rack, with no
+# network. overlayroot is installed during provisioning (see user-data).
+dpkg -s overlayroot >/dev/null 2>&1 ||
+  die "overlayroot is not installed. It ships as a provisioning dependency, so
+this unit predates that change. On a machine with a network:
+
+    sudo apt-get install overlayroot"
 
 [[ -x /usr/local/sbin/combiner-finalize ]] ||
   die "combiner-finalize is not installed — re-run install.sh from a release tree"

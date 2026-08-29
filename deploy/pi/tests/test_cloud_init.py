@@ -513,8 +513,9 @@ def test_finalize_keeps_cmdline_single_line() -> None:
 def test_seal_arms_the_overlay_rather_than_enabling_it() -> None:
     text = SEAL.read_text()
     assert "combiner-finalize" in text
-    # overlayroot must be installed at bench time so locking needs no network.
-    assert "apt-get install -y overlayroot" in text
+    # overlayroot arrives during provisioning, not here: sealing may run on a
+    # unit with no network. Seal only checks for it.
+    assert "dpkg -s overlayroot" in text
     assert "--no-overlay" in text
 
 
@@ -601,3 +602,17 @@ def test_seal_refuses_a_locked_root() -> None:
     guard = text.index("overlayroot=tmpfs' /proc/cmdline")
     first_write = text.index("truncate -s 0 /etc/machine-id")
     assert guard < first_write, "the guard must precede the first write"
+
+
+def test_overlayroot_is_a_provisioning_dependency(user_data: dict[str, Any]) -> None:
+    """Every unit locks its root eventually, and that step may run in a rack with
+    no network. Installing overlayroot at lock time made locking need a mirror;
+    it belongs in provisioning, where the bench network is."""
+    assert "overlayroot" in set(user_data["packages"])
+
+
+@pytest.mark.parametrize("script", [LOCK, SEAL], ids=["combiner-lock", "combiner-seal"])
+def test_lock_and_seal_never_invoke_apt(script: Path) -> None:
+    """They may run on a unit already racked."""
+    invocations = [ln for ln in script.read_text().splitlines() if re.match(r"\s*(\w+=\S+\s+)*apt-get\b", ln)]
+    assert not invocations, invocations
